@@ -2,7 +2,7 @@ import time
 import random
 import struct
 from ecdsa import VerifyingKey, SECP256k1, SigningKey
-from ...utility.utils import *
+from aionetiface.utility.utils import *
 
 #####################################################################################
 PNP_PORT = 5300

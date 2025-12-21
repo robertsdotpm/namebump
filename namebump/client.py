@@ -1,3 +1,8 @@
+"""
+
+
+"""
+
 # TODO: different key per request.
 
 from ecdsa import SECP256k1, SigningKey
@@ -124,7 +129,7 @@ class Client():
         except Exception:
             log_exception()
 
-async def put():
+async def put(name, value, kp):
     pass
 
 async def get():
