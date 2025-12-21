@@ -5,45 +5,46 @@
 
 # TODO: different key per request.
 
+import time
 from ecdsa import SECP256k1, SigningKey
 from aionetiface import *
+from aionetiface.utility.sys_clock import *
+from aionetiface.vendor.ecies import *
 from .utils import *
+from .keypair import *
 
 """
 Important: since this immediately returns if one
 were to follow-up with another call without waiting for
 status receipt it may return an invalid value
 indicating that the server hasn't done the previous call yet.
-"""
-class Client():
-    def __init__(self, sk, dest, dest_pk, nic, sys_clock, proto=TCP):
-        self.dest_pk = dest_pk
-        assert(isinstance(dest_pk, bytes))
-        self.sys_clock = sys_clock
-        self.nic = nic
-        self.dest = dest
+
         self.sk = sk
         self.vkc = sk.verifying_key.to_string("compressed")
-        self.names = {}
-        self.proto = proto
+"""
+
+
+class Client():
+    def __init__(self, dest, dest_pk, sys_clock=None, nic=Interface("default")):
+        self.dest_pk = dest_pk
+        assert(isinstance(dest_pk, bytes))
+        self.nic = nic
+        self.dest = dest
         self.reply_sk = SigningKey.generate(curve=SECP256k1)
         self.reply_pk = self.reply_sk.get_verifying_key().to_string("compressed")
+        self.sys_clock = sys_clock
         assert(len(self.reply_pk) == 33)
 
-    async def get_updated(self, name):
-        if name not in self.names:
-            t = int(self.sys_clock.time())
-            self.names[name] = t
-            return t
+    async def start(self):
+        if not self.sys_clock:
+            self.sys_clock = time
+            
+            #await SysClock(self.nic)
 
-        while 1:
-            t = int(time.time())
-            if t == self.names[name]:
-                await asyncio.sleep(1)
-                continue
-            else:
-                self.names[name] = t
-                return t
+        return self
+
+    def __await__(self):
+        return self.start().__await__()
 
     async def get_dest_pipe(self):
         addr = Address(self.dest[0], self.dest[1])
@@ -56,7 +57,7 @@ class Client():
             route = await route.bind()
 
         try:
-            pipe = await Pipe(self.proto, self.dest, route).connect()
+            pipe = await Pipe(TCP, self.dest, route).connect()
             return pipe
         except Exception:
             log_exception()
@@ -79,11 +80,11 @@ class Client():
         finally:
             await pipe.close()
 
-    async def send_pkt(self, pipe, pkt, sign=True):
+    async def send_pkt(self, pipe, pkt, kp, sign=True):
         pkt.reply_pk = self.reply_pk
         pnp_msg = pkt.get_msg_to_sign()
         if sign:
-            sig = self.sk.sign(pnp_msg)
+            sig = kp.private.sign(pnp_msg)
         else:
             sig = b""
 
@@ -98,33 +99,33 @@ class Client():
             if end > 1:
                 await asyncio.sleep(0.5)
 
-    async def fetch(self, name):
+    async def fetch(self, name, kp):
         try:
             pipe = await self.get_dest_pipe()
-            pkt = PNPPacket(name, vkc=self.vkc)
-            await self.send_pkt(pipe, pkt, sign=False)
+            pkt = PNPPacket(name, vkc=kp.public)
+            await self.send_pkt(pipe, pkt, kp, sign=False)
             return await self.return_resp(pipe)
         except asyncio.CancelledError:
             raise
         except Exception:
             log_exception()
 
-    async def push(self, name, value, behavior=BEHAVIOR_DO_BUMP):
+    async def push(self, name, value, kp, behavior=BEHAVIOR_DO_BUMP):
         try:
-            t = await self.get_updated(name)
+            t = int(self.sys_clock.time())
             pipe = await self.get_dest_pipe()
-            pkt = PNPPacket(name, value, self.vkc, None, t, behavior)
-            await self.send_pkt(pipe, pkt)
+            pkt = PNPPacket(name, value, kp.public, None, t, behavior)
+            await self.send_pkt(pipe, pkt, kp)
             return await self.return_resp(pipe)
         except Exception:
             log_exception()
 
-    async def delete(self, name):
+    async def delete(self, name, kp):
         try:
-            t = await self.get_updated(name)
+            t = int(self.sys_clock.time())
             pipe = await self.get_dest_pipe()
-            pkt = PNPPacket(name, vkc=self.vkc, updated=t)
-            await self.send_pkt(pipe, pkt)
+            pkt = PNPPacket(name, vkc=kp.public, updated=t)
+            await self.send_pkt(pipe, pkt, kp)
             return await self.return_resp(pipe)
         except Exception:
             log_exception()
@@ -137,3 +138,30 @@ async def get():
 
 async def delete():
     pass
+
+if __name__ == "__main__":
+    async def workspace():
+        nic = Interface("default")
+        dest = ("10.0.1.204", 5300)
+        addr = Address(*dest)
+        await addr.res(nic.route())
+
+        r = nic.route()
+        pipe = await Pipe(TCP, ("10.0.1.204", 5300), r).connect()
+
+        print(pipe)
+        return
+
+        kp = Keypair.generate()
+        client = await Client(
+            ("10.0.1.123", 5300),
+            b"03f20b5dcfa5d319635a34f18cb47b339c34f515515a5be733cd7a7f8494e97136"
+        )
+
+        return
+
+        name = str(rand_plain(10))
+        ret = await client.push(name, "v", kp)
+        print(ret)
+
+    async_run(workspace())
