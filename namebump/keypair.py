@@ -5,11 +5,12 @@ class Keypair():
     def __init__(self, priv=None, pub=None):
         self.private = priv
         self.public = pub
+        self.vkc = pub.to_string("compressed")
 
     @staticmethod
     def generate():
         priv = SigningKey.generate(curve=SECP256k1)
-        pub = priv.get_verifying_key().to_string("compressed")
+        pub = priv.get_verifying_key()
         return Keypair(priv, pub)
 
 if __name__ == "__main__":
