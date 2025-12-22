@@ -1,0 +1,3 @@
+OP_GET = 0
+OP_PUT = 1
+OP_DEL = 2

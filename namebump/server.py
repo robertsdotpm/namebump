@@ -24,7 +24,7 @@ from aionetiface import *
 from aionetiface.utility.sys_clock import *
 from aionetiface.vendor.ecies import *
 from .utils import *
-
+from .defs import *
 
 async def v6_range_usage(cur, v6_glob_main, v6_glob_extra, v6_lan_id, _):
     # Count number of subnets used.
@@ -63,7 +63,7 @@ async def v6_exists(cur, v6_glob_main, v6_glob_extra, v6_lan_id, v6_iface_id):
     # Return results.
     return v6_lan_exists, v6_record
 
-async def v6_insert(cur, v6_glob_main, v6_glob_extra, v6_lan_id, v6_iface_id, sys_clock):
+async def v6_insert(cur, v6_glob_main, v6_glob_extra, v6_lan_id, v6_iface_id, now):
     # Insert a new IPv6 IP.
     sql = """INSERT INTO ipv6s
         (
@@ -76,7 +76,7 @@ async def v6_insert(cur, v6_glob_main, v6_glob_extra, v6_lan_id, v6_iface_id, sy
         VALUES (%s, %s, %s, %s, %s)
     """
     sql_params = (int(v6_glob_main), int(v6_glob_extra), int(v6_lan_id),)
-    sql_params += (int(v6_iface_id), int(sys_clock.time()),)
+    sql_params += (int(v6_iface_id), int(now),)
     await cur.execute(sql, sql_params)
 
     # Return the new row index.
@@ -93,7 +93,7 @@ def get_v6_parts(ipr):
 
     return v6_parts
 
-async def record_v6(params, serv, sys_clock):
+async def record_v6(params, serv, now):
     # Replace ipr parameter with v6_parts.
     params = (params[0],) + get_v6_parts(params[1])
 
@@ -115,14 +115,14 @@ async def record_v6(params, serv, sys_clock):
             raise Exception("IPv6 iface limit reached.")
         
         # IP row ID.
-        ip_id = await v6_insert(*params, sys_clock)
+        ip_id = await v6_insert(*params, now)
     else:
         # IP row ID.
         ip_id = v6_record[0]
 
     return ip_id
 
-async def record_v4(params, serv, sys_clock):
+async def record_v4(params, serv, now):
     # Main params.
     cur, ipr = params
 
@@ -137,18 +137,18 @@ async def record_v4(params, serv, sys_clock):
         # Otherwise insert the new IP and return its row ID.
         sql  = "INSERT INTO ipv4s (v4_val, timestamp) "
         sql += "VALUES (%s, %s)"
-        await cur.execute(sql, (int(ipr), int(sys_clock.time()),))
+        await cur.execute(sql, (int(ipr), int(now),))
         ip_id = cur.lastrowid
 
     return ip_id
 
-async def record_ip(af, params, serv, sys_clock):
+async def record_ip(af, params, serv, now):
     if af == IP6:
-        ip_id = await record_v6(params, serv, sys_clock)
+        ip_id = await record_v6(params, serv, now)
     
     # Load existing ip_id or create it - V4.
     if af == IP4:
-        ip_id = await record_v4(params, serv, sys_clock)
+        ip_id = await record_v4(params, serv, now)
 
     return ip_id
 
@@ -170,7 +170,7 @@ async def fetch_name(cur, name, lock=DB_WRITE_LOCK):
     row = await cur.fetchone()
     return row
 
-async def record_name(cur, serv, af, ip_id, name, value, owner_pub, updated, sys_clock):
+async def record_name(cur, serv, af, ip_id, name, value, owner_pub, now):
     # Does name already exist.
     row = await fetch_name(cur, name)
     name_exists = row is not None
@@ -187,7 +187,11 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, updated, sys
     the name. The idea is to reward conservation of resources.
     """
     if names_used:
-        p_names_used = 1 if names_used >= name_limit else (names_used / name_limit)
+        if names_used >= name_limit:
+            p_names_used = 1
+        else:
+            p_names_used = names_used / name_limit
+
         penalty = int(MIN_NAME_DURATION * p_names_used) + 1
         penalty = max(penalty, MIN_DURATION_PENALTY)
     else:
@@ -195,38 +199,33 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, updated, sys
 
     # Update an existing name.
     if name_exists:
-        if row[6] >= updated:
-            raise Exception("Replay attack for name update.")
-        
         # Apply penalty to updated.
-        updated = int(updated)
+        now = int(now)
 
         # Unsigned ints kinda don't like negative numbers.
-        updated = max(updated - penalty, 0)
+        now = max(now - penalty, 0)
 
-        sql  = """
+        sql = """
         UPDATE names SET 
         value=%s,
         af=%s,
         ip_id=%s,
         timestamp=%s
         WHERE name=%s 
-        AND timestamp=%s
         """
         ret = await cur.execute(sql, 
             (
                 value,
                 int(af),
                 int(ip_id),
-                int(updated),
-                name,
-                int(row[6])
+                int(now),
+                name
             )
         )
         if not ret:
             return None
 
-        row = (row[0], name, value, row[3], af, ip_id, updated)
+        row = (row[0], name, value, row[3], af, ip_id, now)
         return row
 
     # Create a new name.
@@ -256,7 +255,7 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, updated, sys
                 owner_pub,
                 int(af),
                 int(ip_id),
-                int(updated),
+                int(now),
             )
         )
 
@@ -264,17 +263,14 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, updated, sys
         return await fetch_name(cur, name)
 
 # Deletes a name if a signed request is more recent.
-async def verified_delete_name(db_con, cur, name, updated):
+async def verified_delete_name(db_con, cur, name):
     row = await fetch_name(cur, name)
     if row is None:
         return
-    
-    if row[6] >= updated:
-        raise Exception("Replay attack for name update.")
         
     sql  = "DELETE FROM names WHERE "
-    sql += "name = %s AND timestamp = %s"
-    await cur.execute(sql, (name, int(row[6])))
+    sql += "name = %s"
+    await cur.execute(sql, (name))
     await db_con.commit()
 
 # Prunes unneeded records from the DB.
@@ -328,24 +324,24 @@ async def verified_pruning(db_con, cur, serv, updated):
 
     await db_con.commit()
 
-async def verified_write_name(db_con, cur, serv, behavior, updated, name, value, owner_pub, af, ip_str, sys_clock):
+async def verified_write_name(db_con, cur, serv, behavior, name, value, owner_pub, af, ip_str, now):
     # Convert ip_str into an IPRange instance.
     cidr = 32 if af == IP4 else 128
     ipr = IPRange(ip_str, cidr=cidr)
 
     # Unneeded records get deleted.
     if behavior != BEHAVIOR_DONT_BUMP:
-        await verified_pruning(db_con, cur, serv, sys_clock.time())
+        await verified_pruning(db_con, cur, serv, now)
 
     # Record IP if needed and get its ID.
     # If it's V6 allocation limits are enforced on subnets.
-    ip_id = await record_ip(af, (cur, ipr,), serv, sys_clock)
+    ip_id = await record_ip(af, (cur, ipr,), serv, now)
     if ip_id is None:
         return
 
     # Record name if needed and get its ID.
     # Also supports transferring a name to a new IP.
-    name_row = await record_name(cur, serv, af, ip_id, name, value, owner_pub, updated, sys_clock)
+    name_row = await record_name(cur, serv, af, ip_id, name, value, owner_pub, now)
     if name_row is None:
         return
 
@@ -392,102 +388,126 @@ class PNPServer(Daemon):
         self.v6_subnet_limit = v6_subnet_limit
         self.v6_iface_limit = v6_iface_limit
 
+    async def handle_get(self, pipe, cur, pkt):
+        row = await fetch_name(cur, pkt.name, DB_READ_LOCK)
+        if row:
+            resp = PNPPacket(
+                op=OP_GET,
+                name=pkt.name,
+                value=row[2],
+                updated=row[6],
+                vkc=row[3],
+                pkid=pkt.pkid,
+                reply_pk=pkt.reply_pk,
+            )
+        else:
+            resp = PNPPacket(
+                op=OP_GET,
+                name=pkt.name,
+                value=b"",
+                updated=0,
+                vkc=pkt.vkc,
+                pkid=pkt.pkid,
+                reply_pk=pkt.reply_pk,
+            )
+
+        await proto_send(pipe, self.serv_resp(resp))
+
+    async def handle_put(
+        self, pipe, cur, db_con, pkt, client_tup
+    ):
+        # Validate signature.
+        if not pkt.sig or not pkt.is_valid_sig():
+            raise Exception("PUT requires valid signature")
+
+        cidr = 32 if pipe.route.af == IP4 else 128
+        await verified_write_name(
+            db_con,
+            cur,
+            self,
+            pkt.behavior,
+            pkt.name,
+            pkt.value,
+            pkt.vkc,
+            pipe.route.af,
+            str(IPRange(client_tup[0], cidr=cidr)),
+            self.sys_clock.time(),
+        )
+
+        await proto_send(pipe, self.serv_resp(pkt))
+
+    async def handle_del(self, pipe, cur, db_con, pkt):
+        if not pkt.sig:
+            raise Exception("DEL requires signature")
+
+        # If it doesn't exist -- nothing to delete.
+        row = await fetch_name(cur, pkt.name, DB_READ_LOCK)
+        if row is None:
+            return await proto_send(pipe, self.serv_resp(pkt))
+
+        # Ensure signature is correct.
+        vk = VerifyingKey.from_string(row[3], curve=SECP256k1)
+        vk.verify(pkt.sig, pkt.get_msg_to_sign())
+
+        # Complete delete operation.
+        await verified_delete_name(
+            db_con,
+            cur,
+            pkt.name
+        )
+
+        # Return response to sender.
+        await proto_send(pipe, self.serv_resp(pkt))
+
     async def msg_cb(self, msg, client_tup, pipe):
         db_con = None
         try:
+            # Decrypt and serialise packet.
             pipe.stream.set_dest_tup(client_tup)
             msg = decrypt(self.reply_sk, msg)
-            cidr = 32 if pipe.route.af == IP4 else 128
             pkt = PNPPacket.unpack(msg)
-            pnp_msg = pkt.get_msg_to_sign()
+
+            # Validate timestamp of signed req.
+            if pkt.op != OP_GET:
+                now = int(self.sys_clock.time())
+                if pkt.updated > (now + 5):
+                    raise Exception("Invalid future update time.")
+                
+                if (now - 5) >= pkt.updated:
+                    raise Exception("Signed request expired.")
+
+            # Connect to local mysql server.
             db_con = await aiomysql.connect(
-                user=self.db_user, 
+                user=self.db_user,
                 password=self.db_pass,
-                db=self.db_name
+                db=self.db_name,
             )
 
-
+            # Handle request based on packet OP.
             async with db_con.cursor() as cur:
-                #await cur.execute("SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                if pkt.op == OP_GET:
+                    return await self.handle_get(pipe, cur, pkt)
 
-                row = await fetch_name(cur, pkt.name, DB_READ_LOCK)
-                if row is not None:
-                    # If no sig fetch name value.
-                    if pkt.sig is None or not len(pkt.sig):
-                        resp = PNPPacket(
-                            name=pkt.name,
-                            value=row[2],
-                            updated=row[6],
-                            vkc=row[3],
-                            pkid=pkt.pkid,
-                            reply_pk=pkt.reply_pk,
-                        )
-
-                        buf = self.serv_resp(resp)
-                        await proto_send(pipe, buf)
-                        return
-
-                    # Ensure valid sig for next delete op.
-                    vk = VerifyingKey.from_string(
-                        row[3],
-                        curve=SECP256k1
+                if pkt.op == OP_PUT:
+                    return await self.handle_put(
+                        pipe, cur, db_con, pkt, client_tup
                     )
-                    vk.verify(pkt.sig, pnp_msg)
 
-                    # Delete pre-existing value.
-                    if not len(pkt.value):
-                        await verified_delete_name(
-                            db_con,
-                            cur,
-                            pkt.name,
-                            int(self.sys_clock.time())
-                        )
-                        buf = self.serv_resp(pkt)
-                        await proto_send(pipe, buf)
-                        return
-
-                # A fetch failed.
-                if pkt.sig is None or not len(pkt.sig):
-                    log(fstr("Error: fetch {0} failed!", (pkt.name,)))
-                    resp = PNPPacket(
-                        name=pkt.name,
-                        value=b"",
-                        updated=0,
-                        vkc=pkt.vkc,
-                        pkid=pkt.pkid,
-                        reply_pk=pkt.reply_pk,
+                if pkt.op == OP_DEL:
+                    return await self.handle_del(
+                        pipe, cur, db_con, pkt
                     )
-                    buf = self.serv_resp(resp)
-                    await proto_send(pipe, buf)
-                    return
 
-                # Check signature is valid.
-                if not pkt.is_valid_sig():
-                    raise Exception("pkt sig is invalid.")
-
-                # Create a new name entry.
-                await verified_write_name(
-                    db_con,
-                    cur,
-                    self,
-                    pkt.behavior,
-                    int(self.sys_clock.time()),
-                    pkt.name,
-                    pkt.value,
-                    pkt.vkc,
-                    pipe.route.af,
-                    str(IPRange(client_tup[0], cidr=cidr)),
-                    self.sys_clock
-                )
-
-                buf = self.serv_resp(pkt)
-                await proto_send(pipe, buf)
+                raise Exception("Unknown pkt.op")
         except Exception:
-            await db_con.rollback()
+            if db_con is not None:
+                await db_con.rollback()
+
             log_exception()
         finally:
             if db_con is not None:
                 db_con.close()
+
 
 async def start_pnp_server(bind_port):
     i = await Interface()

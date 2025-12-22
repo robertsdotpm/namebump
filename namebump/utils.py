@@ -21,12 +21,13 @@ BEHAVIOR_DONT_BUMP = 0
 
 
 class PNPPacket():
-    def __init__(self, name, value=b"", vkc=None, sig=None, updated=None, behavior=BEHAVIOR_DO_BUMP, pkid=None, reply_pk=None, reply_sk=None):
+    def __init__(self, op, name, value=b"", vkc=None, sig=None, updated=None, behavior=BEHAVIOR_DO_BUMP, pkid=None, reply_pk=None, reply_sk=None):
         if updated is not None:
             self.updated = updated
         else:
             self.updated = int(time.time())
 
+        self.op = op
         self.name = to_b(name)
         self.name_len = min(len(self.name), PNP_NAME_LEN)
         self.value = to_b(value)
@@ -47,6 +48,7 @@ class PNPPacket():
 
     def get_msg_to_sign(self):
         return PNPPacket(
+            self.op,
             self.name,
             self.value,
             updated=self.updated,
@@ -71,9 +73,11 @@ class PNPPacket():
     def pack(self):
         buf = b""
 
+        buf += bytes([self.op])
+
         # ID for packet.
         buf += struct.pack("<I", self.pkid)
-        assert(len(buf) == 4)
+        assert(len(buf) == 5)
 
         # Reply pk.
         if self.reply_pk is not None:
@@ -81,19 +85,19 @@ class PNPPacket():
             assert(len(self.reply_pk) == 33)
         else:
             buf += b"\0" * 33
-        assert(len(buf) == 37)
+        assert(len(buf) == 38)
 
         # Behavior for changes.
         buf += bytes([self.behavior])
 
         # Prevent replay.
         buf += struct.pack("<Q", self.updated)
-        assert(len(buf) == 46)
+        assert(len(buf) == 47)
 
         # Header (lens.)
         buf += struct.pack("<H", self.name_len)
         buf += struct.pack("<H", self.value_len)
-        assert(len(buf) == 50)
+        assert(len(buf) == 51)
 
         # Body (var len - limit)
         buf += self.name[:PNP_NAME_LEN]
@@ -111,6 +115,11 @@ class PNPPacket():
     def unpack(buf):
         # Point at start of buffer.
         p = 0
+
+        # Operation.
+        op = buf[p]
+        print(op)
+        p += 1
 
         # Packet ID.
         pkid = struct.unpack("<I", buf[p:p + 4])[0]; p += 4;
@@ -142,5 +151,5 @@ class PNPPacket():
         sig = buf[p:]
         #print(sig)
 
-        return PNPPacket(name, val, vkc, sig, updated, behavior, pkid, reply_pk)
+        return PNPPacket(op, name, val, vkc, sig, updated, behavior, pkid, reply_pk)
 

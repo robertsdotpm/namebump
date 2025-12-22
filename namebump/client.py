@@ -12,6 +12,7 @@ from aionetiface.utility.sys_clock import *
 from aionetiface.vendor.ecies import *
 from .utils import *
 from .keypair import *
+from .defs import *
 
 DEST = ("ovh1.p2pd.net", 5300)
 PK = h_to_b("03f20b5dcfa5d319635a34f18cb47b339c34f515515a5be733cd7a7f8494e97136")
@@ -82,10 +83,13 @@ class Client():
         # Make TCP connection to namebump server.
         try:
             pipe = await Pipe(TCP, self.addr, route).connect()
+            if pipe is None:
+                raise Exception("Could not connect to namebump server.")
+            
             return pipe
         except Exception:
             log_exception()
-            return None
+            raise
 
     async def return_resp(self, pipe):
         try:
@@ -98,7 +102,7 @@ class Client():
             return pkt
         except Exception:
             log_exception()
-            return None
+            raise
         finally:
             await pipe.close()
 
@@ -122,7 +126,7 @@ class Client():
             t = int(self.sys_clock.time())
             pipe = await self.get_dest_pipe()
             vkc = kp.vkc if kp else self.reply_pk
-            pkt = PNPPacket(name, vkc=vkc, updated=t)
+            pkt = PNPPacket(OP_GET, name, vkc=vkc, updated=t)
             await self.send_pkt(pipe, pkt, kp, sign=False)
             return await self.return_resp(pipe)
         except asyncio.CancelledError:
@@ -135,7 +139,7 @@ class Client():
         try:
             t = int(self.sys_clock.time())
             pipe = await self.get_dest_pipe()
-            pkt = PNPPacket(name, value, kp.vkc, None, t, behavior)
+            pkt = PNPPacket(OP_PUT, name, value, kp.vkc, None, t, behavior)
             await self.send_pkt(pipe, pkt, kp)
             return await self.return_resp(pipe)
         except Exception:
@@ -146,7 +150,7 @@ class Client():
         try:
             t = int(self.sys_clock.time())
             pipe = await self.get_dest_pipe()
-            pkt = PNPPacket(name, vkc=kp.vkc, updated=t)
+            pkt = PNPPacket(OP_DEL, name, vkc=kp.vkc, updated=t)
             await self.send_pkt(pipe, pkt, kp)
             return await self.return_resp(pipe)
         except Exception:
@@ -172,24 +176,33 @@ if __name__ == "__main__":
     async def workspace():
         name = str(rand_plain(10))
         kp = Keypair.generate()
-
-        """
-        pk = MAIN_PK
         client = await Client(
             ("127.0.0.1", 5300),
-            pk
+            PK
         )
 
         ret = await client.put(name, "v", kp)
         print(ret)
         print(ret.value)
 
+
         ret = await client.get(name, kp)
         print(ret)
         print(ret.value)
 
-        """
 
+
+        ret = await client.delete(name, kp)
+        print(ret)
+        print(ret.value)
+
+
+        ret = await client.get(name, kp)
+        print(ret)
+        print(ret.value)
+
+
+        """
         out = await put(name, "value", kp)
         print(out)
 
@@ -201,6 +214,7 @@ if __name__ == "__main__":
 
         out = await get(name, kp)
         print(out)
+        """
 
 
     async_run(workspace())
