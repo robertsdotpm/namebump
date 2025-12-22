@@ -10,7 +10,7 @@ from ecdsa import SECP256k1, SigningKey
 from aionetiface import *
 from aionetiface.utility.sys_clock import *
 from aionetiface.vendor.ecies import *
-from .utils import *
+from .packet import *
 from .keypair import *
 from .defs import *
 
@@ -95,7 +95,7 @@ class Client():
         try:
             buf = await proto_recv(pipe)
             buf = decrypt(self.reply_sk, buf)
-            pkt = PNPPacket.unpack(buf)
+            pkt = Packet.unpack(buf)
             if not pkt.updated:
                 pkt.value = None
 
@@ -108,25 +108,25 @@ class Client():
 
     async def send_pkt(self, pipe, pkt, kp, sign=True):
         pkt.reply_pk = self.reply_pk
-        pnp_msg = pkt.get_msg_to_sign()
+        msg = pkt.get_msg_to_sign()
         if sign:
-            sig = kp.private.sign(pnp_msg)
+            sig = kp.private.sign(msg)
         else:
             sig = b""
 
-        buf = pnp_msg + sig
+        buf = msg + sig
         enc_msg = encrypt(self.dest_pk, buf)
         dest = (self.addr.select_ip(self.af).ip, 5300)
         send_success = await pipe.send(enc_msg, dest)
         if not send_success:
-            log(fstr("pnp client send pkt failure."))
+            log(fstr("client send pkt failure."))
 
     async def get(self, name, kp=None):
         try:
             t = int(self.sys_clock.time())
             pipe = await self.get_dest_pipe()
             vkc = kp.vkc if kp else self.reply_pk
-            pkt = PNPPacket(OP_GET, name, vkc=vkc, updated=t)
+            pkt = Packet(OP_GET, name, vkc=vkc, updated=t)
             await self.send_pkt(pipe, pkt, kp, sign=False)
             return await self.return_resp(pipe)
         except asyncio.CancelledError:
@@ -135,13 +135,24 @@ class Client():
             log_exception()
             raise
 
-    async def put(self, name, value, kp, behavior=BEHAVIOR_DO_BUMP):
+    async def put(self, name, value, kp, behavior=DO_BUMP):
         try:
             t = int(self.sys_clock.time())
             pipe = await self.get_dest_pipe()
-            pkt = PNPPacket(OP_PUT, name, value, kp.vkc, None, t, behavior)
+            throw_bump = behavior == THROW_BUMP
+            if behavior == THROW_BUMP:
+                behavior = DONT_BUMP
+
+            pkt = Packet(OP_PUT, name, value, kp.vkc, None, t, behavior)
             await self.send_pkt(pipe, pkt, kp)
-            return await self.return_resp(pipe)
+
+            # Return value.
+            ret = await self.return_resp(pipe)
+            if throw_bump:
+                if not ret.value:
+                    raise KeyError("putting this will bump.")
+            
+            return ret
         except Exception:
             log_exception()
             raise
@@ -150,14 +161,14 @@ class Client():
         try:
             t = int(self.sys_clock.time())
             pipe = await self.get_dest_pipe()
-            pkt = PNPPacket(OP_DEL, name, vkc=kp.vkc, updated=t)
+            pkt = Packet(OP_DEL, name, vkc=kp.vkc, updated=t)
             await self.send_pkt(pipe, pkt, kp)
             return await self.return_resp(pipe)
         except Exception:
             log_exception()
             raise
 
-async def put(name, value, kp, behavior=BEHAVIOR_DO_BUMP):
+async def put(name, value, kp, behavior=DO_BUMP):
     client = await Client(DEST, PK)
     ret = await client.put(name, value, kp, behavior)
     if ret: return ret.value
@@ -176,6 +187,8 @@ if __name__ == "__main__":
     async def workspace():
         name = str(rand_plain(10))
         kp = Keypair.generate()
+
+        
         client = await Client(
             ("127.0.0.1", 5300),
             PK
@@ -200,6 +213,7 @@ if __name__ == "__main__":
         ret = await client.get(name, kp)
         print(ret)
         print(ret.value)
+        
 
 
         """

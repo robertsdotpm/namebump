@@ -23,8 +23,11 @@ from ecdsa import VerifyingKey, SECP256k1, SigningKey
 from aionetiface import *
 from aionetiface.utility.sys_clock import *
 from aionetiface.vendor.ecies import *
-from .utils import *
+from .packet import *
 from .defs import *
+
+class ResourceLimit(Exception):
+    pass
 
 async def v6_range_usage(cur, v6_glob_main, v6_glob_extra, v6_lan_id, _):
     # Count number of subnets used.
@@ -108,11 +111,11 @@ async def record_v6(params, serv, now):
     if v6_record is None:
         # Are we within the subnet limitations?
         if not (v6_lan_exists or (v6_subnets_used < serv.v6_subnet_limit)):
-            raise Exception("IPv6 subnet limit reached.")
+            raise ResourceLimit("IPv6 subnet limit reached.")
 
         # Are we within the iface limitations?
         if not (v6_ifaces_used < serv.v6_iface_limit):
-            raise Exception("IPv6 iface limit reached.")
+            raise ResourceLimit("IPv6 iface limit reached.")
         
         # IP row ID.
         ip_id = await v6_insert(*params, now)
@@ -233,7 +236,7 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, now):
         # Ensure name limit is respected.
         # [ ... active names, ? ]
         if names_used >= name_limit:
-            raise Exception("insert name limit reached.")
+            raise ResourceLimit("insert name limit reached.")
 
         # Insert a brand new name.
         sql = """
@@ -330,27 +333,25 @@ async def verified_write_name(db_con, cur, serv, behavior, name, value, owner_pu
     ipr = IPRange(ip_str, cidr=cidr)
 
     # Unneeded records get deleted.
-    if behavior != BEHAVIOR_DONT_BUMP:
+    if behavior != DONT_BUMP:
         await verified_pruning(db_con, cur, serv, now)
 
     # Record IP if needed and get its ID.
     # If it's V6 allocation limits are enforced on subnets.
     ip_id = await record_ip(af, (cur, ipr,), serv, now)
-    if ip_id is None:
-        return
+    assert(ip_id)
 
     # Record name if needed and get its ID.
     # Also supports transferring a name to a new IP.
     name_row = await record_name(cur, serv, af, ip_id, name, value, owner_pub, now)
-    if name_row is None:
-        return
+    assert(name_row)
 
     # Save current changes.
     await db_con.commit()
 
-class PNPServer(Daemon):
+class Server(Daemon):
     def __init__(self, db_user, db_pass, db_name, reply_sk, reply_pk, sys_clock, v4_name_limit=V4_NAME_LIMIT, v6_name_limit=V6_NAME_LIMIT, min_name_duration=MIN_NAME_DURATION, v6_addr_expiry=V6_ADDR_EXPIRY):
-        self.__name__ = "PNPServer"
+        self.__name__ = "NBServer"
         self.db_user = db_user
         self.db_pass = db_pass
         self.db_name = db_name
@@ -391,7 +392,7 @@ class PNPServer(Daemon):
     async def handle_get(self, pipe, cur, pkt):
         row = await fetch_name(cur, pkt.name, DB_READ_LOCK)
         if row:
-            resp = PNPPacket(
+            resp = Packet(
                 op=OP_GET,
                 name=pkt.name,
                 value=row[2],
@@ -401,7 +402,7 @@ class PNPServer(Daemon):
                 reply_pk=pkt.reply_pk,
             )
         else:
-            resp = PNPPacket(
+            resp = Packet(
                 op=OP_GET,
                 name=pkt.name,
                 value=b"",
@@ -421,18 +422,22 @@ class PNPServer(Daemon):
             raise Exception("PUT requires valid signature")
 
         cidr = 32 if pipe.route.af == IP4 else 128
-        await verified_write_name(
-            db_con,
-            cur,
-            self,
-            pkt.behavior,
-            pkt.name,
-            pkt.value,
-            pkt.vkc,
-            pipe.route.af,
-            str(IPRange(client_tup[0], cidr=cidr)),
-            self.sys_clock.time(),
-        )
+        try:
+            await verified_write_name(
+                db_con,
+                cur,
+                self,
+                pkt.behavior,
+                pkt.name,
+                pkt.value,
+                pkt.vkc,
+                pipe.route.af,
+                str(IPRange(client_tup[0], cidr=cidr)),
+                self.sys_clock.time(),
+            )
+        except ResourceLimit:
+            # Indicate put failed.
+            pkt.value = b""
 
         await proto_send(pipe, self.serv_resp(pkt))
 
@@ -465,7 +470,7 @@ class PNPServer(Daemon):
             # Decrypt and serialise packet.
             pipe.stream.set_dest_tup(client_tup)
             msg = decrypt(self.reply_sk, msg)
-            pkt = PNPPacket.unpack(msg)
+            pkt = Packet.unpack(msg)
 
             # Validate timestamp of signed req.
             if pkt.op != OP_GET:
@@ -509,40 +514,46 @@ class PNPServer(Daemon):
                 db_con.close()
 
 
-async def start_pnp_server(bind_port):
+async def start_server(bind_port):
     i = await Interface()
 
+    # Load servers DB name.
+    if "NB_DB_NAME" in os.environ:
+        db_name = os.environ["NB_DB_NAME"]
+    else:
+        db_name = input("db name: ")
+
     # Load mysql root password details.
-    if "PNP_DB_PW" in os.environ:
-        db_pass = os.environ["PNP_DB_PW"]
+    if "NB_DB_PW" in os.environ:
+        db_pass = os.environ["NB_DB_PW"]
     else:
         db_pass = input("db pass: ")
 
     # Load server reply public key.
-    if "PNP_ENC_PK" in os.environ:
-        reply_pk_hex = os.environ["PNP_ENC_PK"]
+    if "NB_ENC_PK" in os.environ:
+        reply_pk_hex = os.environ["NB_ENC_PK"]
     else:
         reply_pk_hex = input("reply pk: ")
 
     # Load server reply private key
-    if "PNP_ENC_SK" in os.environ:
-        reply_sk_hex = os.environ["PNP_ENC_SK"]
+    if "NB_ENC_SK" in os.environ:
+        reply_sk_hex = os.environ["NB_ENC_SK"]
     else:
         reply_sk_hex = input("reply sk: ")
 
-    # Load PNP server class with DB details.
+    # Load server class with DB details.
     sys_clock = await SysClock(i).start()
-    serv = PNPServer(
+    serv = Server(
         "root",
         db_pass,
-        "pnp",
+        db_name,
         h_to_b(reply_sk_hex),
         h_to_b(reply_pk_hex),
         sys_clock,
     )
 
     # Start the server listening on public routes.
-    print("Now starting PNP serv on ...")
+    print("Now starting namebump serv on ...")
     print(reply_pk_hex)
 
     for proto in [TCP, UDP]:
@@ -552,5 +563,5 @@ async def start_pnp_server(bind_port):
 
 if __name__ == "__main__": 
     loop = asyncio.get_event_loop()
-    task = loop.create_task(start_pnp_server(PNP_PORT))
+    task = loop.create_task(start_server(NB_PORT))
     loop.run_forever()

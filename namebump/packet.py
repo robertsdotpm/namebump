@@ -3,25 +3,12 @@ import random
 import struct
 from ecdsa import VerifyingKey, SECP256k1, SigningKey
 from aionetiface.utility.utils import *
+from .defs import *
 
 #####################################################################################
-PNP_PORT = 5300
-PNP_NAME_LEN = 50 # 10
-PNP_VAL_LEN = 500
-V4_NAME_LIMIT = 20 #4
-V6_NAME_LIMIT = 5 #1
-V6_GLOB_LIMIT = 3
-V6_SUBNET_LIMIT = 15000
-V6_IFACE_LIMIT = 20
-V6_ADDR_EXPIRY = 604800 # 7 days no change expiry.
-MIN_NAME_DURATION = 604800 # 7 days to migrate names.
-MIN_DURATION_PENALTY = 60 # 1 min.
-BEHAVIOR_DO_BUMP = 1
-BEHAVIOR_DONT_BUMP = 0
 
-
-class PNPPacket():
-    def __init__(self, op, name, value=b"", vkc=None, sig=None, updated=None, behavior=BEHAVIOR_DO_BUMP, pkid=None, reply_pk=None, reply_sk=None):
+class Packet():
+    def __init__(self, op, name, value=b"", vkc=None, sig=None, updated=None, behavior=DO_BUMP, pkid=None, reply_pk=None, reply_sk=None):
         if updated is not None:
             self.updated = updated
         else:
@@ -29,9 +16,9 @@ class PNPPacket():
 
         self.op = op
         self.name = to_b(name)
-        self.name_len = min(len(self.name), PNP_NAME_LEN)
+        self.name_len = min(len(self.name), NB_NAME_LEN)
         self.value = to_b(value)
-        self.value_len = min(len(self.value), PNP_VAL_LEN)
+        self.value_len = min(len(self.value), NB_VAL_LEN)
         self.vkc = vkc
         self.sig = sig
         self.behavior = behavior
@@ -47,7 +34,7 @@ class PNPPacket():
         self.reply_pk = self.reply_sk.get_verifying_key().to_string("compressed")
 
     def get_msg_to_sign(self):
-        return PNPPacket(
+        return Packet(
             self.op,
             self.name,
             self.value,
@@ -100,8 +87,8 @@ class PNPPacket():
         assert(len(buf) == 51)
 
         # Body (var len - limit)
-        buf += self.name[:PNP_NAME_LEN]
-        buf += self.value[:PNP_VAL_LEN]
+        buf += self.name[:NB_NAME_LEN]
+        buf += self.value[:NB_VAL_LEN]
         
         # Variable length.
         if self.vkc is not None:
@@ -118,7 +105,6 @@ class PNPPacket():
 
         # Operation.
         op = buf[p]
-        print(op)
         p += 1
 
         # Packet ID.
@@ -138,8 +124,8 @@ class PNPPacket():
         # Extract header portion.
         name_len = struct.unpack("<H", buf[p:p + 2])[0]; p += 2;
         val_len = struct.unpack("<H", buf[p:p + 2])[0]; p += 2;
-        min(name_len, PNP_NAME_LEN)
-        min(val_len, PNP_VAL_LEN)
+        min(name_len, NB_NAME_LEN)
+        min(val_len, NB_VAL_LEN)
 
         # Extract body fields.
         name = buf[p:p + name_len]; p += name_len;
@@ -151,5 +137,5 @@ class PNPPacket():
         sig = buf[p:]
         #print(sig)
 
-        return PNPPacket(op, name, val, vkc, sig, updated, behavior, pkid, reply_pk)
+        return Packet(op, name, val, vkc, sig, updated, behavior, pkid, reply_pk)
 

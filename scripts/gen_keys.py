@@ -1,11 +1,14 @@
-from p2pd import to_h
-from p2pd.ecies.utils import generate_key
-secp_k = generate_key()
-reply_sk = secp_k.secret
-reply_pk = secp_k.public_key.format(True)
+from aionetiface import *
+from ecdsa import SECP256k1, SigningKey
 
-reply_pk_hex = to_h(reply_pk)
-reply_sk_hex = to_h(reply_sk)
+print("To run your own server -- generate a key pair.")
+print("dont tell anyone else your sk though.")
+print()
 
-print(fstr("reply pk hex = {0}", (reply_pk_hex,)))
-print(fstr("reply sk hex = {0}", (reply_sk_hex,)))
+sk = SigningKey.generate(curve=SECP256k1)
+sk_buf = sk.to_string()
+vk = sk.get_verifying_key()
+vk_buf = vk.to_string("compressed")
+
+print(fstr("sk hex = {0}", (to_h(sk_buf),)))
+print(fstr("pk hex = {0}", (to_h(vk_buf),)))

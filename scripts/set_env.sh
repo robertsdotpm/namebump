@@ -1,5 +1,5 @@
-export P2PD_DEBUG=0
-export PNP_DB_PW=""
-export PNP_ENC_PK=""
-export PNP_ENC_SK=""
+export NB_DB_NAME=""
+export NB_DB_PW=""
+export NB_ENC_PK=""
+export NB_ENC_SK=""
 
