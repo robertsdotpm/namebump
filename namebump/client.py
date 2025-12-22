@@ -1,9 +1,9 @@
 """
-
+- Requests will be replayable for ~5 secs until they expire. This is to make
+the API easier to use and because the use-case doesn't justify adding nonces and
+a bunch of other non-sense.
 
 """
-
-# TODO: different key per request.
 
 import time
 from ecdsa import SECP256k1, SigningKey
@@ -13,31 +13,30 @@ from aionetiface.vendor.ecies import *
 from .utils import *
 from .keypair import *
 
-"""
-Important: since this immediately returns if one
-were to follow-up with another call without waiting for
-status receipt it may return an invalid value
-indicating that the server hasn't done the previous call yet.
-
-        self.sk = sk
-        self.vkc = sk.verifying_key.to_string("compressed")
-"""
-
+DEST = ("ovh1.p2pd.net", 5300)
+PK = h_to_b("03f20b5dcfa5d319635a34f18cb47b339c34f515515a5be733cd7a7f8494e97136")
 
 class Client():
     def __init__(self, dest, dest_pk, sys_clock=None, nic=Interface("default")):
-        self.af = None
-        self.addr = None
+        # Specific namebump server details.
+        self.dest = dest
         self.dest_pk = dest_pk
         assert(isinstance(dest_pk, bytes))
         assert(len(dest_pk) == 33)
 
-        self.nic = nic
-        self.dest = dest
+        # Ephemeral key to receive encrypted reply on.
         self.reply_sk = SigningKey.generate(curve=SECP256k1)
         self.reply_pk = self.reply_sk.get_verifying_key().to_string("compressed")
-        self.sys_clock = sys_clock
         assert(len(self.reply_pk) == 33)
+
+        # Requests have a timestamp so they can expire.
+        # Sys_clock is initialised from an NTP call.
+        self.sys_clock = sys_clock
+
+        # Other network-specific info.
+        self.nic = nic
+        self.af = None
+        self.addr = None
 
     async def start(self):
         if not self.sys_clock:
@@ -92,13 +91,10 @@ class Client():
         try:
             buf = await proto_recv(pipe)
             buf = decrypt(self.reply_sk, buf)
-            #print("decrypted pnp resp:", buf)
             pkt = PNPPacket.unpack(buf)
-            #print(pkt)
-            
             if not pkt.updated:
                 pkt.value = None
-                
+
             return pkt
         except Exception:
             log_exception()
@@ -116,14 +112,16 @@ class Client():
 
         buf = pnp_msg + sig
         enc_msg = encrypt(self.dest_pk, buf)
-        send_success = await pipe.send(enc_msg, self.dest)
+        dest = (self.addr.select_ip(self.af).ip, 5300)
+        send_success = await pipe.send(enc_msg, dest)
         if not send_success:
             log(fstr("pnp client send pkt failure."))
 
-    async def fetch(self, name, kp):
+    async def get(self, name, kp=None):
         try:
             pipe = await self.get_dest_pipe()
-            pkt = PNPPacket(name, vkc=kp.vkc)
+            vkc = kp.vkc if kp else self.reply_pk
+            pkt = PNPPacket(name, vkc=vkc)
             await self.send_pkt(pipe, pkt, kp, sign=False)
             return await self.return_resp(pipe)
         except asyncio.CancelledError:
@@ -131,7 +129,7 @@ class Client():
         except Exception:
             log_exception()
 
-    async def push(self, name, value, kp, behavior=BEHAVIOR_DO_BUMP):
+    async def put(self, name, value, kp, behavior=BEHAVIOR_DO_BUMP):
         t = int(self.sys_clock.time())
         pipe = await self.get_dest_pipe()
         try:
@@ -151,38 +149,54 @@ class Client():
         except Exception:
             log_exception()
 
-async def put(name, value, kp):
-    pass
+async def put(name, value, kp, behavior=BEHAVIOR_DO_BUMP):
+    client = await Client(DEST, PK)
+    ret = await client.put(name, value, kp, behavior)
+    if ret: return ret.value
 
-async def get():
-    pass
+async def get(name, kp=None):
+    client = await Client(DEST, PK)
+    ret = await client.get(name, kp)
+    if ret: return ret.value
 
-async def delete():
-    pass
-
-def clear_logs():
-    from pathlib import Path
-    log_dir = Path.home() / "aionetiface" / "logs"
-    for p in log_dir.iterdir():
-        if p.is_file() or p.is_symlink():
-            p.unlink()
+async def delete(name, kp):
+    client = await Client(DEST, PK)
+    ret = await client.delete(name, kp)
+    if ret: return ret.value
 
 if __name__ == "__main__":
     async def workspace():
-        pk = h_to_b("03f20b5dcfa5d319635a34f18cb47b339c34f515515a5be733cd7a7f8494e97136")
-
-
+        name = str(rand_plain(10))
         kp = Keypair.generate()
+
+        """
+        pk = MAIN_PK
         client = await Client(
             ("127.0.0.1", 5300),
             pk
         )
 
-
-
-        name = str(rand_plain(10))
-        ret = await client.push(name, "v", kp)
+        ret = await client.put(name, "v", kp)
         print(ret)
         print(ret.value)
+
+        ret = await client.get(name, kp)
+        print(ret)
+        print(ret.value)
+
+        """
+
+        out = await put(name, "value", kp)
+        print(out)
+
+        out = await get(name, kp)
+        print(out)
+
+        out = await delete(name, kp)
+        print(out)
+
+        out = await get(name, kp)
+        print(out)
+
 
     async_run(workspace())
