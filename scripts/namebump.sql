@@ -1,11 +1,11 @@
 -- phpMyAdmin SQL Dump
--- version 5.2.1
+-- version 5.2.3
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost
--- Generation Time: Jun 07, 2024 at 07:30 AM
--- Server version: 10.5.23-MariaDB-0+deb11u1
--- PHP Version: 7.4.33
+-- Generation Time: Dec 22, 2025 at 04:13 AM
+-- Server version: 8.4.7
+-- PHP Version: 8.2.29
 
 SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
 START TRANSACTION;
@@ -28,9 +28,9 @@ SET time_zone = "+00:00";
 --
 
 CREATE TABLE `ipv4s` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `v4_val` int(10) UNSIGNED NOT NULL,
-  `timestamp` bigint(20) UNSIGNED NOT NULL
+  `id` bigint UNSIGNED NOT NULL,
+  `v4_val` int UNSIGNED NOT NULL,
+  `timestamp` bigint UNSIGNED NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -40,12 +40,12 @@ CREATE TABLE `ipv4s` (
 --
 
 CREATE TABLE `ipv6s` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `v6_glob_main` int(10) UNSIGNED NOT NULL,
-  `v6_glob_extra` smallint(5) UNSIGNED NOT NULL,
-  `v6_lan_id` smallint(5) UNSIGNED NOT NULL,
-  `v6_iface_id` bigint(20) UNSIGNED NOT NULL,
-  `timestamp` bigint(20) UNSIGNED NOT NULL
+  `id` bigint UNSIGNED NOT NULL,
+  `v6_glob_main` int UNSIGNED NOT NULL,
+  `v6_glob_extra` smallint UNSIGNED NOT NULL,
+  `v6_lan_id` smallint UNSIGNED NOT NULL,
+  `v6_iface_id` bigint UNSIGNED NOT NULL,
+  `timestamp` bigint UNSIGNED NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -55,13 +55,14 @@ CREATE TABLE `ipv6s` (
 --
 
 CREATE TABLE `names` (
-  `id` bigint(20) UNSIGNED NOT NULL,
+  `id` bigint UNSIGNED NOT NULL,
   `name` varbinary(50) NOT NULL,
   `value` varbinary(500) NOT NULL,
   `owner_pub` binary(33) NOT NULL,
-  `af` tinyint(3) UNSIGNED NOT NULL,
-  `ip_id` bigint(20) UNSIGNED NOT NULL,
-  `timestamp` bigint(20) UNSIGNED NOT NULL
+  `af` tinyint UNSIGNED NOT NULL,
+  `ip_id` bigint UNSIGNED NOT NULL,
+  `timestamp` bigint UNSIGNED NOT NULL,
+  `updated` bigint UNSIGNED NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -97,19 +98,19 @@ ALTER TABLE `names`
 -- AUTO_INCREMENT for table `ipv4s`
 --
 ALTER TABLE `ipv4s`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=308;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=309;
 
 --
 -- AUTO_INCREMENT for table `ipv6s`
 --
 ALTER TABLE `ipv6s`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=383;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=383;
 
 --
 -- AUTO_INCREMENT for table `names`
 --
 ALTER TABLE `names`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1210;
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1232;
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;

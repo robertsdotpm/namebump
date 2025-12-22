@@ -173,16 +173,19 @@ async def fetch_name(cur, name, lock=DB_WRITE_LOCK):
     row = await cur.fetchone()
     return row
 
-async def record_name(cur, serv, af, ip_id, name, value, owner_pub, now):
+async def get_names_used(cur, af, ip_id):
+    sql  = "SELECT COUNT(id) FROM names WHERE af=%s "
+    sql += "AND ip_id=%s FOR UPDATE"
+    await cur.execute(sql, (int(af), int(ip_id),))
+    return (await cur.fetchone())[0]
+
+async def record_name(cur, serv, af, ip_id, name, value, owner_pub, req_time):
     # Does name already exist.
     row = await fetch_name(cur, name)
     name_exists = row is not None
 
     # Get names used and limit.
-    sql  = "SELECT COUNT(id) FROM names WHERE af=%s "
-    sql += "AND ip_id=%s FOR UPDATE"
-    await cur.execute(sql, (int(af), int(ip_id),))
-    names_used = (await cur.fetchone())[0]
+    names_used = await get_names_used(cur, af, ip_id)
     name_limit = name_limit_by_af(af, serv)
 
     """
@@ -200,35 +203,42 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, now):
     else:
         penalty = 0
 
+    # Apply penalty given req_time.
+    expiry = max(int(req_time) - penalty, 0)
+
     # Update an existing name.
     if name_exists:
-        # Apply penalty to updated.
-        now = int(now)
-
-        # Unsigned ints kinda don't like negative numbers.
-        now = max(now - penalty, 0)
-
+        """
+        In order to prevent a name being able to be transfered to a
+        different IP by simply replaying someone else's request
+        we require that an update to a name change the timestamp of the req.
+        Since reqs are encrypted and signed this won't be possible.
+        """
         sql = """
         UPDATE names SET 
         value=%s,
         af=%s,
         ip_id=%s,
-        timestamp=%s
+        timestamp=%s,
+        updated=%s
         WHERE name=%s 
+        AND updated != %s
         """
         ret = await cur.execute(sql, 
             (
                 value,
                 int(af),
                 int(ip_id),
-                int(now),
-                name
+                int(expiry),
+                int(req_time),
+                name,
+                int(req_time),
             )
         )
         if not ret:
             return None
 
-        row = (row[0], name, value, row[3], af, ip_id, now)
+        row = (row[0], name, value, row[3], af, ip_id, expiry)
         return row
 
     # Create a new name.
@@ -247,9 +257,10 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, now):
             owner_pub,
             af,
             ip_id,
-            timestamp
+            timestamp,
+            updated
         )
-        VALUES(%s, %s, %s, %s, %s, %s)
+        VALUES(%s, %s, %s, %s, %s, %s, %s)
         """
         ret = await cur.execute(sql, 
             (
@@ -258,7 +269,8 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, now):
                 owner_pub,
                 int(af),
                 int(ip_id),
-                int(now),
+                int(expiry),
+                int(req_time),
             )
         )
 
@@ -278,16 +290,6 @@ async def verified_delete_name(db_con, cur, name):
 
 # Prunes unneeded records from the DB.
 async def verified_pruning(db_con, cur, serv, updated):
-    # Delete all ipv6s that haven't been updated for X seconds.
-    sql = """
-    DELETE FROM ipv6s
-    WHERE ((%s - timestamp) >= %s)
-    """
-    ret = await cur.execute(sql, (
-        int(updated),
-        int(serv.v6_addr_expiry),
-    ))
-
     # Delete all names that haven't been updated for X seconds.
     sql = """
     DELETE FROM names
@@ -327,7 +329,7 @@ async def verified_pruning(db_con, cur, serv, updated):
 
     await db_con.commit()
 
-async def verified_write_name(db_con, cur, serv, behavior, name, value, owner_pub, af, ip_str, now):
+async def verified_write_name(db_con, cur, serv, behavior, name, value, owner_pub, af, ip_str, now, req_time):
     # Convert ip_str into an IPRange instance.
     cidr = 32 if af == IP4 else 128
     ipr = IPRange(ip_str, cidr=cidr)
@@ -343,7 +345,16 @@ async def verified_write_name(db_con, cur, serv, behavior, name, value, owner_pu
 
     # Record name if needed and get its ID.
     # Also supports transferring a name to a new IP.
-    name_row = await record_name(cur, serv, af, ip_id, name, value, owner_pub, now)
+    name_row = await record_name(
+        cur, 
+        serv, 
+        af, 
+        ip_id, 
+        name, 
+        value, 
+        owner_pub,
+        req_time
+    )
     assert(name_row)
 
     # Save current changes.
@@ -434,6 +445,7 @@ class Server(Daemon):
                 pipe.route.af,
                 str(IPRange(client_tup[0], cidr=cidr)),
                 self.sys_clock.time(),
+                pkt.updated
             )
         except ResourceLimit:
             # Indicate put failed.
@@ -512,7 +524,6 @@ class Server(Daemon):
         finally:
             if db_con is not None:
                 db_con.close()
-
 
 async def start_server(bind_port):
     i = await Interface()
