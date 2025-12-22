@@ -119,25 +119,28 @@ class Client():
 
     async def get(self, name, kp=None):
         try:
+            t = int(self.sys_clock.time())
             pipe = await self.get_dest_pipe()
             vkc = kp.vkc if kp else self.reply_pk
-            pkt = PNPPacket(name, vkc=vkc)
+            pkt = PNPPacket(name, vkc=vkc, updated=t)
             await self.send_pkt(pipe, pkt, kp, sign=False)
             return await self.return_resp(pipe)
         except asyncio.CancelledError:
             raise
         except Exception:
             log_exception()
+            raise
 
     async def put(self, name, value, kp, behavior=BEHAVIOR_DO_BUMP):
-        t = int(self.sys_clock.time())
-        pipe = await self.get_dest_pipe()
         try:
+            t = int(self.sys_clock.time())
+            pipe = await self.get_dest_pipe()
             pkt = PNPPacket(name, value, kp.vkc, None, t, behavior)
             await self.send_pkt(pipe, pkt, kp)
             return await self.return_resp(pipe)
         except Exception:
             log_exception()
+            raise
 
     async def delete(self, name, kp):
         try:
@@ -148,6 +151,7 @@ class Client():
             return await self.return_resp(pipe)
         except Exception:
             log_exception()
+            raise
 
 async def put(name, value, kp, behavior=BEHAVIOR_DO_BUMP):
     client = await Client(DEST, PK)
