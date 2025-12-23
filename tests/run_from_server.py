@@ -50,29 +50,11 @@ async def NB_clear_tables():
         
     db_con.close()
 
-async def NB_get_test_client_serv(v4_name_limit=V4_NAME_LIMIT, v6_name_limit=V6_NAME_LIMIT, min_name_duration=MIN_NAME_DURATION, v6_serv_ips=None, v6_addr_expiry=V6_ADDR_EXPIRY):
-    i = await Interface("default")
-    print(i)
-
+async def NB_get_test_client_serv(v4_name_limit=V4_NAME_LIMIT, v6_name_limit=V6_NAME_LIMIT, min_name_duration=MIN_NAME_DURATION, v6_serv_ips=None, v6_addr_expiry=V6_ADDR_EXPIRY, i=Interface("default")):
     sys_clock = SysClock(i, ntp=1766450948)
     loop = asyncio.get_event_loop()
     #loop.register_clock(sys_clock)
     #sys_clock.time = time.time
-
-    """
-    print(loop.clocks)
-
-    print(sys_clock.time())
-
-    await asyncio.sleep(2)
-
-    print(sys_clock.time())
-
-    return
-    exit()
-    """
-
-
     serv = Server(
         NB_TEST_DB_USER,
         NB_TEST_DB_PASS,
@@ -88,10 +70,10 @@ async def NB_get_test_client_serv(v4_name_limit=V4_NAME_LIMIT, v6_name_limit=V6_
     
     # Bind to loop back or specific IP6.
     if v6_serv_ips is None:
-        print(await serv.listen_loopback(TCP, NB_TEST_PORT, i))
+        await serv.listen_loopback(TCP, NB_TEST_PORT, i)
     else:
         route = await i.route(IP6).bind(ips=v6_serv_ips, port=NB_TEST_PORT)
-        print(await serv.add_listener(TCP, route))
+        await serv.add_listener(TCP, route)
     #await serv.listen_all(UDP, NB_TEST_PORT, i)
 
 
@@ -118,7 +100,6 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
         # Test store and get.
         for af in VALID_AFS:
-            print("try ", af)
             client = clients[af]
             await client.put(
                 NB_TEST_NAME,
@@ -131,10 +112,11 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
         await serv.close()
 
-
     async def test_NB_prune(self):
         clients, serv = await NB_get_test_client_serv()
         await NB_clear_tables()
+
+
 
         # Make all v6 addresses expire.
         serv.v6_addr_expiry = 0
@@ -154,8 +136,9 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
         # Will delete the ipv6 value as it expires.
         # The name remains unaffected.
         async with db_con.cursor() as cur:
-            updated = time.time()
+            updated = serv.sys_clock.time()
             await verified_pruning(db_con, cur, serv, updated)
+            await db_con.commit()
 
         # Make all names expire.
         # Don't make the address expire this time.
@@ -175,8 +158,9 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
         since it has no attached names.
         """
         async with db_con.cursor() as cur:
-            updated = time.time()
+            updated = serv.sys_clock.time()
             await verified_pruning(db_con, cur, serv, updated)
+            await db_con.commit()
 
         # After everything runs both tables should be empty.
         async with db_con.cursor() as cur:
@@ -333,7 +317,6 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
             clients, serv = await NB_get_test_client_serv(3, 3, 4)
 
             # Fill the stack.
-            print(name_limit)
             for i in range(0, name_limit):
                 await clients[af].put(f"{i}", "val", NB_LOCAL_SK)
                 await asyncio.sleep(1)
@@ -381,8 +364,7 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
         """
 
 
-        name_limit = 3
-        
+        name_limit = 3     
         for af in (IP6,):
             await NB_clear_tables()
             clients, serv = await NB_get_test_client_serv(name_limit, name_limit)
@@ -403,7 +385,6 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
             # Check insert over limit rejected.
             ret = await clients[af].get("4")
-            print(ret.value)
             assert(ret.value == None)
             await serv.close()
 
@@ -428,8 +409,6 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
             await NB_clear_tables()
 
             assert(alice[af].kp.vkc != bob[af].kp.vkc)
-            print(to_h(alice[af].kp.vkc), to_h(bob[af].kp.vkc))
-
             await alice[af].put(test_name, alice_val, alice[af].kp)
             await asyncio.sleep(2)
 
@@ -439,7 +418,6 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
             # The changes aren't saved then.
             ret = await bob[af].get(test_name)
-            print(ret.value)
             assert(ret.value == alice_val)
 
         await serv.close()
@@ -452,34 +430,32 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
             # Fill up the name queue.
             for i in range(0, name_limit):
-                await clients[af].put(f"{i}", f"{i}", DONT_BUMP)
+                await clients[af].put(f"{i}", f"{i}", NB_LOCAL_SK, DONT_BUMP)
                 await asyncio.sleep(2)
 
             # Ols names expire.
             await asyncio.sleep(3)
 
             # Normally this would bump one.
-            await clients[af].put(f"3", f"3", DONT_BUMP)
+            await clients[af].put(f"3", f"3", NB_LOCAL_SK, DONT_BUMP)
             ret = await clients[af].get(f"3")
-            print(ret.value)
             assert(ret.value == None)
 
             # All original values should exist.
             for i in range(0, name_limit):
                 ret = await clients[af].get(f"{i}")
-                print(ret.value)
                 assert(ret.value == to_b(f"{i}"))
 
             await serv.close() 
 
     """
-ip address add fe80:3456:7890:1111:0000:0000:0000:0001/128 dev enp3s0
-ip address add fe80:3456:7890:1111:0000:0000:0000:0002/128 dev enp3s0
-ip address add fe80:3456:7890:1111:0000:0000:0000:0003/128 dev enp3s0
-ip address add fe80:3456:7890:2222:0000:0000:0000:0001/128 dev enp3s0
-ip address add fe80:3456:7890:2222:0000:0000:0000:0002/128 dev enp3s0
-ip address add fe80:3456:7890:2222:0000:0000:0000:0003/128 dev enp3s0
-ip address add fe80:3456:7890:3333:0000:0000:0000:0001/128 dev enp3s0
+ip address add fe80:3456:7890:1111:0000:0000:0000:0001/128 dev ens192
+ip address add fe80:3456:7890:1111:0000:0000:0000:0002/128 dev ens192
+ip address add fe80:3456:7890:1111:0000:0000:0000:0003/128 dev ens192
+ip address add fe80:3456:7890:2222:0000:0000:0000:0001/128 dev ens192
+ip address add fe80:3456:7890:2222:0000:0000:0000:0002/128 dev ens192
+ip address add fe80:3456:7890:2222:0000:0000:0000:0003/128 dev ens192
+ip address add fe80:3456:7890:3333:0000:0000:0000:0001/128 dev ens192
 
 New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:1111:0000:0000:0000:0001" -PrefixLength 128 -AddressFamily IPv6 -Type Unicast
 New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:1111:0000:0000:0000:0002" -PrefixLength 128 -AddressFamily IPv6 -Type Unicast
@@ -493,7 +469,8 @@ New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:3333:0000:0000:000
         # Subnet limit = 2
         # Iface limit = 2
         await NB_clear_tables()
-        clients, serv = await NB_get_test_client_serv(v6_serv_ips="fe80:3456:7890:1111:0000:0000:0000:0001")
+        i = await Interface() # Needed for link local to work
+        clients, serv = await NB_get_test_client_serv(v6_serv_ips="fe80:3456:7890:1111:0000:0000:0000:0001", i=i)
         serv.set_v6_limits(2, 2)
 
         vectors = [
@@ -549,8 +526,8 @@ New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:3333:0000:0000:000
 
                 # Return a pipe to the PNP server.
                 pipe = await Pipe(
-                    client.proto,
-                    client.dest,
+                    TCP,
+                    client.addr,
                     route
                 ).connect()
 
@@ -560,7 +537,7 @@ New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:3333:0000:0000:000
             client.get_dest_pipe = get_dest_pipe
 
             # Test out the vector.
-            await client.put(f"{offset}", f"{offset}")
+            await client.put(f"{offset}", f"{offset}", NB_LOCAL_SK)
             await asyncio.sleep(2)
             ret = await client.get(f"{offset}")
             if ret.value is None:
@@ -573,9 +550,11 @@ New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:3333:0000:0000:000
 
     async def test_v6_no_name_ip_prune(self):
         await NB_clear_tables()
+        i = await Interface()
         clients, serv = await NB_get_test_client_serv(
             v6_serv_ips="fe80:3456:7890:1111:0000:0000:0000:0001",
-            v6_name_limit=10
+            v6_name_limit=10,
+            i=i
         )
         serv.set_v6_limits(3, 3)
 
@@ -610,8 +589,8 @@ New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:3333:0000:0000:000
 
                 # Return a pipe to the PNP server.
                 pipe = await Pipe(
-                    client.proto,
-                    client.dest,
+                    TCP,
+                    client.addr,
                     route
                 ).connect()
 
@@ -621,7 +600,7 @@ New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:3333:0000:0000:000
             client.get_dest_pipe = get_dest_pipe
 
             # Test out the vector.
-            await client.put(f"{offset}", f"{offset}")
+            await client.put(f"{offset}", f"{offset}", NB_LOCAL_SK)
             await asyncio.sleep(2)
             ret = await client.get(f"{offset}")
             if ret.value is None:
@@ -643,10 +622,10 @@ New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:3333:0000:0000:000
         db_con.close()
 
         for offset in range(0, len(vectors)):
-            await client.delete(f"{offset}")
+            await client.delete(f"{offset}", NB_LOCAL_SK)
 
         # Should delete all past ipv6s not associated with a name.
-        await client.put("new", "something")
+        await client.put("new", "something", NB_LOCAL_SK)
 
         db_con = await aiomysql.connect(
             user=NB_TEST_DB_USER, 

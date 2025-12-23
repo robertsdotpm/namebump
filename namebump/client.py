@@ -159,7 +159,7 @@ class Client():
             
             # Name already exists.
             if ret:
-                if not ret.value:
+                if not ret.value and throw_bump:
                     raise KeyError("Name already exists.")
             
             return ret

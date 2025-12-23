@@ -57,14 +57,11 @@ async def v6_exists(cur, v6_glob_main, v6_glob_extra, v6_lan_id, v6_iface_id):
 
     # Check if IPv6 record exists.
     sql += "AND v6_iface_id=%s"
-    print(sql)
-    print((int(v6_glob_main), int(v6_glob_extra), int(v6_lan_id), int(v6_iface_id),))
     await cur.execute(
         sql,
         (int(v6_glob_main), int(v6_glob_extra), int(v6_lan_id), int(v6_iface_id),)
     )
     v6_record = await cur.fetchone()
-    print(v6_record)
 
     # Return results.
     return v6_lan_exists, v6_record
@@ -83,8 +80,6 @@ async def v6_insert(cur, v6_glob_main, v6_glob_extra, v6_lan_id, v6_iface_id, no
     """
     sql_params = (int(v6_glob_main), int(v6_glob_extra), int(v6_lan_id),)
     sql_params += (int(v6_iface_id), int(now),)
-
-    print("v6 insert params = ", sql_params)
     await cur.execute(sql, sql_params)
 
 
@@ -106,27 +101,15 @@ async def record_v6(params, serv, now):
     # Replace ipr parameter with v6_parts.
     params = (params[0],) + get_v6_parts(params[1])
 
-    print("record v6 params", params)
-
     # Get consumption numbers for the IPv6 range.
     v6_subnets_used, v6_ifaces_used = await v6_range_usage(*params)
 
     # Check whether the LAN ID already exists.
     # If the whole IPv6 already exists the record is not None.
     v6_lan_exists, v6_record = await v6_exists(*params)
-
-    print("v6 params", params)
-    print("v6 lan exists", v6_lan_exists)
-
-    sql = "SELECT * FROM ipv6s"
-    await params[0].execute(sql)
-    rows = await params[0].fetchall()
-    print(rows)
     
     # Start logic to handle inserting the IPv6.
     if v6_record is None:
-        print("v6 is none")
-
         # Are we within the subnet limitations?
         if not (v6_lan_exists or (v6_subnets_used < serv.v6_subnet_limit)):
             raise ResourceLimit("IPv6 subnet limit reached.")
@@ -137,7 +120,6 @@ async def record_v6(params, serv, now):
         
         # IP row ID.
         ip_id = await v6_insert(*params, now)
-        print("insert = ", ip_id)
     else:
         # IP row ID.
         ip_id = v6_record[0]
@@ -207,8 +189,6 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, req_time):
     names_used = await get_names_used(cur, af, ip_id)
     name_limit = name_limit_by_af(af, serv)
 
-    print(names_used, " ", name_limit)
-
     """
     The more resources a person uses for names, the less time they have to refresh
     the name. The idea is to reward conservation of resources.
@@ -257,7 +237,6 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, req_time):
             )
         )
         if not ret:
-            print("ret is none in name exists")
             return None
 
         row = (row[0], name, value, row[3], af, ip_id, expiry)
@@ -301,22 +280,16 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, req_time):
 
 # Deletes a name if a signed request is more recent.
 async def verified_delete_name(db_con, cur, name):
-    try:
-        await db_con.begin()  # Start Transaction explicitly
+
+    row = await fetch_name(cur, name)
+    if row is None:
+        await db_con.rollback() # Nothing to do
+        return
         
-        row = await fetch_name(cur, name)
-        if row is None:
-            await db_con.rollback() # Nothing to do
-            return
-            
-        sql  = "DELETE FROM names WHERE "
-        sql += "name = %s"
-        await cur.execute(sql, (name,))
-        
-        await db_con.commit() # Commit success
-    except Exception as e:
-        await db_con.rollback() # Rollback failure
-        raise e
+    sql  = "DELETE FROM names WHERE "
+    sql += "name = %s"
+    await cur.execute(sql, (name,))
+    await db_con.commit() # Commit success
 
 async def verified_pruning(db_con, cur, serv, updated):
     # Delete all names that haven't been updated for X seconds.
@@ -329,8 +302,6 @@ async def verified_pruning(db_con, cur, serv, updated):
         int(updated),
         int(serv.min_name_duration),
     ))
-
-    print("prune name = ", updated, " ", serv.min_name_duration)
 
     # Delete all IPs that don't have associated names.
     for table, af in [["ipv4s", "2"], ["ipv6s", "10"]]:
@@ -346,46 +317,36 @@ async def verified_pruning(db_con, cur, serv, updated):
         """, (table, ))
         await cur.execute(sql, (af,))
 
-    # REMOVED: await db_con.commit() 
-    # The transaction is now managed by the caller.
-
 async def verified_write_name(db_con, cur, serv, behavior, name, value, owner_pub, af, ip_str, now, req_time):
     # Convert ip_str into an IPRange instance.
     cidr = 32 if af == IP4 else 128
     ipr = IPRange(ip_str, cidr=cidr)
 
-    try:
-        # Unneeded records get deleted.
-        if behavior != DONT_BUMP:
-            # If this fails, the whole transaction rolls back
-            await verified_pruning(db_con, cur, serv, now)
+    # Unneeded records get deleted.
+    if behavior != DONT_BUMP:
+        # If this fails, the whole transaction rolls back
+        await verified_pruning(db_con, cur, serv, now)
 
-        # Record IP if needed and get its ID.
-        # If it's V6 allocation limits are enforced on subnets.
-        ip_id = await record_ip(af, (cur, ipr,), serv, now)
-        print("ip id ret = ", ip_id)
-        await db_con.commit()
+    # Record IP if needed and get its ID.
+    # If it's V6 allocation limits are enforced on subnets.
+    ip_id = await record_ip(af, (cur, ipr,), serv, now)
+    await db_con.commit()
 
-        
-        # Record name if needed and get its ID.
-        name_row = await record_name(
-            cur, 
-            serv, 
-            af, 
-            ip_id, 
-            name, 
-            value, 
-            owner_pub,
-            req_time
-        )
+    
+    # Record name if needed and get its ID.
+    name_row = await record_name(
+        cur, 
+        serv, 
+        af, 
+        ip_id, 
+        name, 
+        value, 
+        owner_pub,
+        req_time
+    )
 
-        # If we got here, everything is valid.
-        await db_con.commit()
-
-    except Exception as e:
-        # If ResourceLimit or DatabaseError occurs, undo everything (including pruning)
-        await db_con.rollback()
-        raise e
+    # If we got here, everything is valid.
+    await db_con.commit()
 
 class Server(Daemon):
     def __init__(self, db_user, db_pass, db_name, reply_sk, reply_pk, sys_clock, v4_name_limit=V4_NAME_LIMIT, v6_name_limit=V6_NAME_LIMIT, min_name_duration=MIN_NAME_DURATION, v6_addr_expiry=V6_ADDR_EXPIRY):
@@ -563,10 +524,7 @@ class Server(Daemon):
                 error_pkt.reply_pk = pkt.reply_pk
 
             await proto_send(pipe, self.serv_resp(pkt))
-
-            what_exception()
-            print("rolling back db")
-
+            
             if db_con is not None:
                 await db_con.rollback()
 
