@@ -12,7 +12,7 @@ class Packet():
         if updated is not None:
             self.updated = updated
         else:
-            self.updated = int(time.time())
+            raise Exception("packet update time not set.")
 
         self.op = op
         self.name = to_b(name)

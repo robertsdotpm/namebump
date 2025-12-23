@@ -1,0 +1,8 @@
+- push new aionetiface version
+- get tests working and check theyre not broken
+- pull latest for ovh server
+- merge into main
+- push to pypi
+- could make some nice systemctl scripts
+
+- register clock!

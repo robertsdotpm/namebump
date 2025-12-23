@@ -1,13 +1,11 @@
 # Namebump
 
 Namebump is a registrationless key-value store where names are claimed using
-public-key signatures. Storage is limited per IP address, requiring renewal as IPs
-change. All names decay over time, and are bumped automatically if they are not
-renewed.
+public-key signatures. Storage is limited per IP address, requiring renewal
+as IPs change. Unused names are bumped over time if not renewed.
 
 ```python3
 import namebump
-import uuid
 import asyncio
 
 async def main():
@@ -15,14 +13,13 @@ async def main():
     kp = namebump.Keypair.generate()
 
     # Save a value at a unique name (must be unique.)
-    name = str(uuid.uuid4())
-    await namebump.put(name, "value", kp)
+    await namebump.put("your unique name", "value", kp)
 
     # Get your val back -> value.
-    value = await namebump.get(name, kp)
+    value = await namebump.get("your unique name")
 
     # Delete it:
-    await namebump.delete(name, kp)
+    await namebump.delete("your unique name", kp)
 
 asyncio.run(main())
 
@@ -45,6 +42,8 @@ To manually specify a server to use:
 
 ```python3
 
+# Client also takes a nic param
+# See aionetiface for usage if you want to load a specific NIC.
 client = await namebump.Client(
     ("127.0.0.1", 5300),
     b"compressed ECDSA secp256k1 pub key of server"

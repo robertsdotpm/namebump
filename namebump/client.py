@@ -127,7 +127,12 @@ class Client():
             pipe = await self.get_dest_pipe()
             vkc = kp.vkc if kp else self.reply_pk
             pkt = Packet(OP_GET, name, vkc=vkc, updated=t)
-            await self.send_pkt(pipe, pkt, kp, sign=False)
+            if kp:
+                do_sign = True
+            else:
+                do_sign = False
+
+            await self.send_pkt(pipe, pkt, kp, sign=do_sign)
             return await self.return_resp(pipe)
         except asyncio.CancelledError:
             raise
@@ -151,6 +156,11 @@ class Client():
             if throw_bump:
                 if not ret.value:
                     raise KeyError("putting this will bump.")
+            
+            # Name already exists.
+            if ret:
+                if not ret.value:
+                    raise KeyError("Name already exists.")
             
             return ret
         except Exception:
