@@ -1,8 +1,9 @@
-- push new aionetiface version
-- get tests working and check theyre not broken
+- write more tests for namebump
+- push new aionetiface version to pypi
 - pull latest for ovh server
+
 - merge into main
 - push to pypi
 - could make some nice systemctl scripts
 
-- register clock!
+- aionetiface could use the bind patches to make it easier to use

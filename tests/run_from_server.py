@@ -333,8 +333,6 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
             await serv.close()
 
     async def test_NB_freshness_limit(self):
-        await NB_clear_tables()
-
         # Connect to local mysql server.
         """
         db_con = await aiomysql.connect(
@@ -365,7 +363,7 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
 
         name_limit = 3     
-        for af in (IP6,):
+        for af in VALID_AFS:
             await NB_clear_tables()
             clients, serv = await NB_get_test_client_serv(name_limit, name_limit)
 
@@ -386,6 +384,23 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
             # Check insert over limit rejected.
             ret = await clients[af].get("4")
             assert(ret.value == None)
+            await serv.close()
+
+    async def test_bump_exception(self):
+        name_limit = 1
+        for af in VALID_AFS:
+            await NB_clear_tables()
+            clients, serv = await NB_get_test_client_serv(name_limit, name_limit)
+
+            await clients[af].put("a", "val", NB_LOCAL_SK)
+
+            throw_set = False
+            try:
+                await clients[af].put("b", "val", NB_LOCAL_SK, THROW_BUMP)
+            except KeyError:
+                throw_set = True
+
+            assert(throw_set)
             await serv.close()
 
     async def test_NB_respect_owner_access(self):
@@ -642,6 +657,8 @@ New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:3333:0000:0000:000
 
         # Cleanup.
         await serv.close()
+
+
 
 if __name__ == '__main__':
     # Load mysql root password details.
