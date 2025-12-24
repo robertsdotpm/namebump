@@ -198,7 +198,7 @@ if __name__ == "__main__":
         name = str(rand_plain(10))
         kp = Keypair.generate()
 
-        
+        """
         client = await Client(
             ("127.0.0.1", 5300),
             PK
@@ -223,14 +223,15 @@ if __name__ == "__main__":
         ret = await client.get(name, kp)
         print(ret)
         print(ret.value)
+        """
         
 
 
-        """
+        
         out = await put(name, "value", kp)
         print(out)
 
-        out = await get(name, kp)
+        out = await get(name)
         print(out)
 
         out = await delete(name, kp)
@@ -238,7 +239,7 @@ if __name__ == "__main__":
 
         out = await get(name, kp)
         print(out)
-        """
+        
 
 
     async_run(workspace())
