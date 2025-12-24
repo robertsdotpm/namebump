@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68", "wheel", "aionetiface"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "namebump"
-version = "0.0.3"
+version = "0.0.5"
 description = "Namebump is a registrationless, key-authenticated name registry where writes bump prior values."
 readme = "README.md"
 requires-python = ">=3.5"
