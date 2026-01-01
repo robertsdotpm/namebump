@@ -4,8 +4,8 @@ from ecdsa import VerifyingKey, SECP256k1, SigningKey
 class Keypair():
     def __init__(self, priv=None, pub=None):
         self.private = priv
-        self.public = pub
-        self.vkc = pub.to_string("compressed")
+        self.public = pub or priv.get_verifying_key()
+        self.vkc = self.public.to_string("compressed")
 
     @staticmethod
     def generate():

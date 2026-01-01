@@ -7,3 +7,9 @@
 - could make some nice systemctl scripts
 
 - aionetiface could use the bind patches to make it easier to use
+
+add tests for whether reqs and replies are actually encrypted
+- maybe raise exception if not instance of selector for nat lib
+since methods are going to break -- this will be more important as
+the module is used in others event loops -- prob need to be
+more specific about event loop usage too
