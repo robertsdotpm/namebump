@@ -9,7 +9,7 @@ import aiomysql
 from ecdsa import SigningKey, SECP256k1
 import time
 from aionetiface import *
-from namebump import *
+from namebump.namebump import *
 from namebump.server import *
 
 

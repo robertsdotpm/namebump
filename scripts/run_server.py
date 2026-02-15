@@ -1,4 +1,4 @@
-import namebump
+import namebump.namebump as namebump
 import asyncio
 
 async def run_server():
