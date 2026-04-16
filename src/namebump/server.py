@@ -475,7 +475,6 @@ class Server(Daemon):
         await proto_send(pipe, self.serv_resp(pkt))
 
     async def msg_cb(self, msg, client_tup, pipe):
-        db_con = None
         pkt = None
         try:
             # Decrypt and serialise packet.
@@ -488,37 +487,36 @@ class Server(Daemon):
                 now = int(self.sys_clock.time())
                 if pkt.updated > (now + 5):
                     raise Exception("Invalid future update time.")
-                
+
                 if (now - 5) >= pkt.updated:
                     raise Exception("Signed request expired.")
 
-            # Connect to local mysql server.
-            db_con = await aiomysql.connect(
+            # Connect to local mysql server; __aexit__ closes it automatically.
+            async with await aiomysql.connect(
                 user=self.db_user,
                 password=self.db_pass,
                 db=self.db_name,
-            )
+            ) as db_con:
+                # Handle request based on packet OP.
+                async with db_con.cursor() as cur:
+                    if pkt.op == OP_GET:
+                        return await self.handle_get(pipe, cur, pkt)
 
-            # Handle request based on packet OP.
-            async with db_con.cursor() as cur:
-                if pkt.op == OP_GET:
-                    return await self.handle_get(pipe, cur, pkt)
+                    if pkt.op == OP_PUT:
+                        return await self.handle_put(
+                            pipe, cur, db_con, pkt, client_tup
+                        )
 
-                if pkt.op == OP_PUT:
-                    return await self.handle_put(
-                        pipe, cur, db_con, pkt, client_tup
-                    )
+                    if pkt.op == OP_DEL:
+                        return await self.handle_del(
+                            pipe, cur, db_con, pkt
+                        )
 
-                if pkt.op == OP_DEL:
-                    return await self.handle_del(
-                        pipe, cur, db_con, pkt
-                    )
-
-                raise Exception("Unknown pkt.op")
+                    raise Exception("Unknown pkt.op")
         except Exception:
             error_pkt = Packet(
-                OP_ERROR, 
-                b"Error", 
+                OP_ERROR,
+                b"Error",
                 "Unknown error occured.",
                 updated=int(self.sys_clock.time())
             )
@@ -527,14 +525,7 @@ class Server(Daemon):
                 error_pkt.reply_pk = pkt.reply_pk
 
             await proto_send(pipe, self.serv_resp(pkt))
-            
-            if db_con is not None:
-                await db_con.rollback()
-
             log_exception()
-        finally:
-            if db_con is not None:
-                db_con.close()
 
 async def start_server(bind_port):
     i = await Interface()
