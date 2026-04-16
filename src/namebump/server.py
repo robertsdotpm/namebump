@@ -18,6 +18,9 @@ that uses IP limits to reduce spam.
 """
 
 import os
+import sys
+import signal
+import asyncio
 import aiomysql
 from ecdsa import VerifyingKey, SECP256k1, SigningKey
 from aionetiface import *
@@ -580,7 +583,51 @@ async def start_server(bind_port):
 
     return serv
 
-if __name__ == "__main__": 
+def _shutdown(loop, sig=None):
+    """Cancel all tasks and stop the loop on SIGINT/SIGTERM."""
+    if sig:
+        log(fstr("Received signal {0}, shutting down...", (sig.name,)))
+
+    try:
+        pending = asyncio.all_tasks(loop)
+    except AttributeError:
+        pending = asyncio.Task.all_tasks(loop)
+
+    for t in pending:
+        t.cancel()
+
+
+if __name__ == "__main__":
     loop = asyncio.get_event_loop()
+
+    # Graceful Ctrl+C / SIGTERM on all platforms.
+    if sys.platform != "win32":
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, _shutdown, loop, sig)
+            except NotImplementedError:
+                pass
+    # On Windows KeyboardInterrupt propagates as an exception from run_forever().
+
     task = loop.create_task(start_server(NB_PORT))
-    loop.run_forever()
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        _shutdown(loop)
+    finally:
+        # Wait for all tasks to finish their CancelledError handling.
+        try:
+            pending = asyncio.all_tasks(loop)
+        except AttributeError:
+            pending = asyncio.Task.all_tasks(loop)
+
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+        try:
+            if hasattr(loop, "shutdown_asyncgens"):
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            if hasattr(loop, "shutdown_default_executor"):
+                loop.run_until_complete(loop.shutdown_default_executor())
+        finally:
+            loop.close()
