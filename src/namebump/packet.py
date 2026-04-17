@@ -5,8 +5,6 @@ from ecdsa import VerifyingKey, SECP256k1, SigningKey
 from aionetiface.utility.utils import *
 from .defs import *
 
-#####################################################################################
-
 class Packet():
     def __init__(self, op, name, value=b"", vkc=None, sig=None, updated=None, behavior=DO_BUMP, pkid=None, reply_pk=None, reply_sk=None):
         if updated is not None:
@@ -108,34 +106,39 @@ class Packet():
         p += 1
 
         # Packet ID.
-        pkid = struct.unpack("<I", buf[p:p + 4])[0]; p += 4;
+        pkid = struct.unpack("<I", buf[p:p + 4])[0]
+        p += 4
 
         # Reply pk.
-        reply_pk = buf[p:p + 33]; p += 33;
+        reply_pk = buf[p:p + 33]
+        p += 33
         if reply_pk == b"\0" * 33:
             reply_pk = None
 
-        # Extract behavior.
-        behavior = buf[p]; p += 1;
+        # Behavior flag.
+        behavior = buf[p]
+        p += 1
 
-        # Extract timestamp portion.
-        updated = struct.unpack("<Q", buf[p:p + 8])[0]; p += 8;
+        # Timestamp.
+        updated = struct.unpack("<Q", buf[p:p + 8])[0]
+        p += 8
 
-        # Extract header portion.
-        name_len = struct.unpack("<H", buf[p:p + 2])[0]; p += 2;
-        val_len = struct.unpack("<H", buf[p:p + 2])[0]; p += 2;
-        min(name_len, NB_NAME_LEN)
-        min(val_len, NB_VAL_LEN)
+        # Name and value lengths (clamped to their declared maximums).
+        name_len = min(struct.unpack("<H", buf[p:p + 2])[0], NB_NAME_LEN)
+        p += 2
+        val_len = min(struct.unpack("<H", buf[p:p + 2])[0], NB_VAL_LEN)
+        p += 2
 
-        # Extract body fields.
-        name = buf[p:p + name_len]; p += name_len;
-        val = buf[p:p + val_len]; p += val_len;
+        # Name and value bodies.
+        name = buf[p:p + name_len]
+        p += name_len
+        val = buf[p:p + val_len]
+        p += val_len
 
-        # Extract sig field.
-        vkc = buf[p:p + 33]; p += 33;
-        #print(vkc)
+        # Compressed verifying key and signature.
+        vkc = buf[p:p + 33]
+        p += 33
         sig = buf[p:]
-        #print(sig)
 
         return Packet(op, name, val, vkc, sig, updated, behavior, pkid, reply_pk)
 

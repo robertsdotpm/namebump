@@ -85,7 +85,6 @@ async def v6_insert(cur, v6_glob_main, v6_glob_extra, v6_lan_id, v6_iface_id, no
     sql_params += (int(v6_iface_id), int(now),)
     await cur.execute(sql, sql_params)
 
-
     # Return the new row index.
     return cur.lastrowid
 
@@ -192,10 +191,8 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, req_time):
     names_used = await get_names_used(cur, af, ip_id)
     name_limit = name_limit_by_af(af, serv)
 
-    """
-    The more resources a person uses for names, the less time they have to refresh
-    the name. The idea is to reward conservation of resources.
-    """
+    # Penalty: the more names an IP holds, the shorter the refresh window.
+    # This rewards conservation of the shared name namespace.
     if names_used:
         if names_used >= name_limit:
             p_names_used = 1
@@ -212,12 +209,9 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, req_time):
 
     # Update an existing name.
     if name_exists:
-        """
-        In order to prevent a name being able to be transfered to a
-        different IP by simply replaying someone else's request
-        we require that an update to a name change the timestamp of the req.
-        Since reqs are encrypted and signed this won't be possible.
-        """
+        # Guard against replay attacks: require that the timestamp on the
+        # update differs from the stored one.  Because requests are signed
+        # and encrypted, a replayed packet cannot forge a new timestamp.
         sql = """
         UPDATE names SET 
         value=%s,
@@ -335,7 +329,6 @@ async def verified_write_name(db_con, cur, serv, behavior, name, value, owner_pu
     ip_id = await record_ip(af, (cur, ipr,), serv, now)
     await db_con.commit()
 
-    
     # Record name if needed and get its ID.
     name_row = await record_name(
         cur, 

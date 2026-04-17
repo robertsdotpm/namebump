@@ -43,13 +43,9 @@ class Client():
         if not self.sys_clock:
             self.sys_clock = time
 
-        """
-        A dest may be passed in as a domain name that supports
-        different address families. This code tries to select an AF
-        that the local NIC also supports.
-
-        TODO: This should really be moved to aionetiface too.
-        """
+        # Resolve dest to an IP.  If dest is a domain that has both A and AAAA
+        # records, prefer the AF that the local NIC also supports.
+        # TODO: This selection logic should live in aionetiface.
         self.addr = await Address(*self.dest, self.nic)
         for af in self.nic.supported():
             try:
@@ -70,14 +66,12 @@ class Client():
     async def get_dest_pipe(self):
         route = self.nic.route(self.af)
 
-        # Dest is a loopback address.
-        # Otherwise the connection won't succeed.
-        # TODO: move this and similar FE80 logic into bind tbh.
+        # Bind to the loopback address explicitly so the connection succeeds.
+        # For non-loopback destinations, bind to the default outbound address.
+        # TODO: move this and similar FE80 logic into bind.
         if self.dest[0] in VALID_LOCALHOST:
             route = await route.bind(ips=self.dest[0])
-        
-        # Destination is not loopback.
-        if self.dest[0] not in VALID_LOCALHOST:
+        else:
             route = await route.bind()
 
         # Make TCP connection to namebump server.
@@ -127,12 +121,7 @@ class Client():
             pipe = await self.get_dest_pipe()
             vkc = kp.vkc if kp else self.reply_pk
             pkt = Packet(OP_GET, name, vkc=vkc, updated=t)
-            if kp:
-                do_sign = True
-            else:
-                do_sign = False
-
-            await self.send_pkt(pipe, pkt, kp, sign=do_sign)
+            await self.send_pkt(pipe, pkt, kp, sign=bool(kp))
             return await self.return_resp(pipe)
         except asyncio.CancelledError:
             raise
@@ -198,36 +187,6 @@ if __name__ == "__main__":
         name = str(rand_plain(10))
         kp = Keypair.generate()
 
-        """
-        client = await Client(
-            ("127.0.0.1", 5300),
-            PK
-        )
-
-        ret = await client.put(name, "v", kp)
-        print(ret)
-        print(ret.value)
-
-
-        ret = await client.get(name, kp)
-        print(ret)
-        print(ret.value)
-
-
-
-        ret = await client.delete(name, kp)
-        print(ret)
-        print(ret.value)
-
-
-        ret = await client.get(name, kp)
-        print(ret)
-        print(ret.value)
-        """
-        
-
-
-        
         out = await put(name, "value", kp)
         print(out)
 
@@ -239,7 +198,5 @@ if __name__ == "__main__":
 
         out = await get(name, kp)
         print(out)
-        
-
 
     async_run(workspace())
