@@ -1,7 +1,7 @@
 import time
 import random
 import struct
-from ecdsa import VerifyingKey, SECP256k1, SigningKey
+from ecdsa import VerifyingKey, SECP256k1, SigningKey, BadSignatureError
 from aionetiface.utility.utils import *
 from .defs import *
 
@@ -68,7 +68,7 @@ class Packet():
             # recover_verify_key(msg, self.sig, vk_b)
             vk.verify(self.sig, msg)
             return True
-        except Exception:
+        except BadSignatureError:
             log_exception()
             return False
 

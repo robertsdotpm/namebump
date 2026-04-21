@@ -89,9 +89,9 @@ class Client():
             pipe = await Pipe(TCP, self.addr, route).connect()
             if pipe is None:
                 raise Exception("Could not connect to namebump server.")
-            
+
             return pipe
-        except Exception:
+        except (OSError, ConnectionError, asyncio.TimeoutError):
             log_exception()
             raise
 
@@ -129,7 +129,7 @@ class Client():
             return await self.return_resp(pipe)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except (OSError, ConnectionError, asyncio.TimeoutError):
             log_exception()
             raise
         finally:
@@ -153,7 +153,7 @@ class Client():
                 raise KeyError("putting this will bump.")
 
             return ret
-        except Exception:
+        except (OSError, ConnectionError, asyncio.TimeoutError):
             log_exception()
             raise
         finally:
@@ -168,7 +168,7 @@ class Client():
             pkt = Packet(OP_DEL, name, vkc=kp.vkc, updated=t)
             await self.send_pkt(pipe, pkt, kp)
             return await self.return_resp(pipe)
-        except Exception:
+        except (OSError, ConnectionError, asyncio.TimeoutError):
             log_exception()
             raise
         finally:

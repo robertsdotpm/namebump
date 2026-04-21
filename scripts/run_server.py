@@ -5,8 +5,8 @@ async def run_server():
     await namebump.start_server()
 
     # Sleep forever.
-    while 1:
+    while True:
         await asyncio.sleep(1)
 
-asyncio.run(run_server())
-
+if __name__ == "__main__":
+    asyncio.run(run_server())

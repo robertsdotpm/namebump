@@ -51,7 +51,9 @@ async def NB_clear_tables():
         
     db_con.close()
 
-async def NB_get_test_client_serv(v4_name_limit=V4_NAME_LIMIT, v6_name_limit=V6_NAME_LIMIT, min_name_duration=MIN_NAME_DURATION, v6_serv_ips=None, v6_addr_expiry=V6_ADDR_EXPIRY, i=Interface("default")):
+async def NB_get_test_client_serv(v4_name_limit=V4_NAME_LIMIT, v6_name_limit=V6_NAME_LIMIT, min_name_duration=MIN_NAME_DURATION, v6_serv_ips=None, v6_addr_expiry=V6_ADDR_EXPIRY, i=None):
+    if i is None:
+        i = Interface("default")
     sys_clock = SysClock(i, ntp=1766450948)
     loop = asyncio.get_event_loop()
     #loop.register_clock(sys_clock)

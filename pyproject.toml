@@ -21,7 +21,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 
-dependencies = ["aionetiface"]
+dependencies = ["aionetiface", "ecdsa"]
 
 [project.urls]
 Homepage = "https://github.com/robertsdotpm/namebump"

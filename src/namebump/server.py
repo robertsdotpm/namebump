@@ -511,7 +511,7 @@ class Server(Daemon):
                         )
 
                     raise Exception("Unknown pkt.op")
-        except Exception:
+        except (OSError, ValueError, KeyError):
             log_exception()
             error_pkt = Packet(
                 OP_ERROR,
