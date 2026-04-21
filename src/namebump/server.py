@@ -24,6 +24,7 @@ import asyncio
 import aiomysql
 from ecdsa import VerifyingKey, SECP256k1, SigningKey
 from aionetiface import *
+from aionetiface.net.daemon import Daemon
 from aionetiface.utility.sys_clock import *
 from aionetiface.vendor.ecies import *
 from .packet import *
