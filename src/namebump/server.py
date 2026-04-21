@@ -511,18 +511,19 @@ class Server(Daemon):
 
                     raise Exception("Unknown pkt.op")
         except Exception:
+            log_exception()
             error_pkt = Packet(
                 OP_ERROR,
                 b"Error",
                 "Unknown error occured.",
+                vkc=self.reply_pk,
                 updated=self.sys_clock.time()
             )
 
             if pkt:
                 error_pkt.reply_pk = pkt.reply_pk
 
-            await proto_send(pipe, self.serv_resp(pkt))
-            log_exception()
+            await proto_send(pipe, self.serv_resp(error_pkt))
 
 async def start_server(bind_port):
     i = await Interface()

@@ -18,23 +18,30 @@ DEST = ("ovh1.p2pd.net", 5300)
 PK = h_to_b("03f20b5dcfa5d319635a34f18cb47b339c34f515515a5be733cd7a7f8494e97136")
 
 class Client():
-    def __init__(self, dest, dest_pk, sys_clock=None, nic=Interface("default")):
-        # Specific namebump server details.
+    """Async client for a single namebump server.
+
+    Usage:
+        client = await Client(dest=("host", 5300), dest_pk=<33-byte pk>)
+        result = await client.get("myname")
+        await client.put("myname", b"value", keypair)
+        await client.delete("myname", keypair)
+
+    Each method opens a fresh TCP connection, sends one encrypted+signed
+    request, reads the encrypted reply, then closes the connection.
+    """
+
+    def __init__(self, dest, dest_pk, sys_clock=None, nic=None):
+        if not isinstance(dest_pk, bytes) or len(dest_pk) != 33:
+            raise ValueError("dest_pk must be a 33-byte compressed public key")
+
         self.dest = dest
         self.dest_pk = dest_pk
-        assert(isinstance(dest_pk, bytes))
-        assert(len(dest_pk) == 33)
 
-        # Ephemeral key to receive encrypted reply on.
+        # Ephemeral key pair used to receive the encrypted server reply.
         self.reply_sk = SigningKey.generate(curve=SECP256k1)
         self.reply_pk = self.reply_sk.get_verifying_key().to_string("compressed")
-        assert(len(self.reply_pk) == 33)
 
-        # Requests have a timestamp so they can expire.
-        # Sys_clock is initialised from an NTP call.
         self.sys_clock = sys_clock
-
-        # Other network-specific info.
         self.nic = nic
         self.af = None
         self.addr = None
@@ -42,6 +49,9 @@ class Client():
     async def start(self):
         if not self.sys_clock:
             self.sys_clock = time
+
+        if self.nic is None:
+            self.nic = Interface("default")
 
         # Resolve dest to an IP.  If dest is a domain that has both A and AAAA
         # records, prefer the AF that the local NIC also supports.
@@ -86,19 +96,12 @@ class Client():
             raise
 
     async def return_resp(self, pipe):
-        try:
-            buf = await proto_recv(pipe)
-            buf = decrypt(self.reply_sk, buf)
-            pkt = Packet.unpack(buf)
-            if not pkt.updated:
-                pkt.value = None
-
-            return pkt
-        except Exception:
-            log_exception()
-            raise
-        finally:
-            await pipe.close()
+        buf = await proto_recv(pipe)
+        buf = decrypt(self.reply_sk, buf)
+        pkt = Packet.unpack(buf)
+        if not pkt.updated:
+            pkt.value = None
+        return pkt
 
     async def send_pkt(self, pipe, pkt, kp, sign=True):
         pkt.reply_pk = self.reply_pk
@@ -113,9 +116,10 @@ class Client():
         dest = (self.addr.select_ip(self.af).ip, 5300)
         send_success = await pipe.send(enc_msg, dest)
         if not send_success:
-            log(fstr("client send pkt failure."))
+            raise IOError("client send pkt failure")
 
     async def get(self, name, kp=None):
+        pipe = None
         try:
             t = self.sys_clock.time()
             pipe = await self.get_dest_pipe()
@@ -128,8 +132,12 @@ class Client():
         except Exception:
             log_exception()
             raise
+        finally:
+            if pipe is not None:
+                await pipe.close()
 
     async def put(self, name, value, kp, behavior=DO_BUMP):
+        pipe = None
         try:
             t = self.sys_clock.time()
             pipe = await self.get_dest_pipe()
@@ -140,23 +148,20 @@ class Client():
             pkt = Packet(OP_PUT, name, value, kp.vkc, None, t, behavior)
             await self.send_pkt(pipe, pkt, kp)
 
-            # Return value.
             ret = await self.return_resp(pipe)
-            if throw_bump:
-                if not ret.value:
-                    raise KeyError("putting this will bump.")
-            
-            # Name already exists.
-            if ret:
-                if not ret.value and throw_bump:
-                    raise KeyError("Name already exists.")
-            
+            if throw_bump and not ret.value:
+                raise KeyError("putting this will bump.")
+
             return ret
         except Exception:
             log_exception()
             raise
+        finally:
+            if pipe is not None:
+                await pipe.close()
 
     async def delete(self, name, kp):
+        pipe = None
         try:
             t = self.sys_clock.time()
             pipe = await self.get_dest_pipe()
@@ -166,6 +171,9 @@ class Client():
         except Exception:
             log_exception()
             raise
+        finally:
+            if pipe is not None:
+                await pipe.close()
 
 async def put(name, value, kp, behavior=DO_BUMP):
     client = await Client(DEST, PK)

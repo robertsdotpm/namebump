@@ -6,6 +6,22 @@ from aionetiface.utility.utils import *
 from .defs import *
 
 class Packet():
+    """Wire-protocol message for namebump get/put/delete operations.
+
+    Wire layout (fixed header = 51 bytes, followed by variable-length body):
+        [0]       op        – 1 byte   operation code (OP_*)
+        [1:5]     pkid      – 4 bytes  random packet ID (little-endian u32)
+        [5:38]    reply_pk  – 33 bytes ephemeral ECIES reply key (zeros = absent)
+        [38]      behavior  – 1 byte   bump behaviour flag (DO/DONT/THROW)
+        [39:47]   updated   – 8 bytes  request timestamp (little-endian f64)
+        [47:49]   name_len  – 2 bytes  clamped name length
+        [49:51]   val_len   – 2 bytes  clamped value length
+        [51:]     name      – up to NB_NAME_LEN bytes
+                  value     – up to NB_VAL_LEN bytes
+                  vkc       – 33 bytes owner compressed public key (optional)
+                  sig       – remaining bytes ECDSA signature (optional)
+    """
+
     def __init__(self, op, name, value=b"", vkc=None, sig=None, updated=None, behavior=DO_BUMP, pkid=None, reply_pk=None, reply_sk=None):
         if updated is not None:
             self.updated = updated
@@ -25,7 +41,8 @@ class Packet():
         self.reply_pk = reply_pk
         self.reply_sk = reply_sk
         if vkc is not None:
-            assert(len(vkc) == 33)
+            if len(vkc) != 33:
+                raise ValueError(f"vkc must be 33 bytes (compressed public key), got {len(vkc)}")
 
     def gen_reply_key(self):
         self.reply_sk = SigningKey.generate(curve=SECP256k1)
@@ -62,27 +79,32 @@ class Packet():
 
         # ID for packet.
         buf += struct.pack("<I", self.pkid)
-        assert(len(buf) == 5)
+        if len(buf) != 5:
+            raise RuntimeError(f"pack: expected 5 bytes after pkid, got {len(buf)}")
 
         # Reply pk.
         if self.reply_pk is not None:
+            if len(self.reply_pk) != 33:
+                raise ValueError(f"reply_pk must be 33 bytes, got {len(self.reply_pk)}")
             buf += self.reply_pk
-            assert(len(self.reply_pk) == 33)
         else:
             buf += b"\0" * 33
-        assert(len(buf) == 38)
+        if len(buf) != 38:
+            raise RuntimeError(f"pack: expected 38 bytes after reply_pk, got {len(buf)}")
 
         # Behavior for changes.
         buf += bytes([self.behavior])
 
         # Prevent replay.
         buf += struct.pack("<d", self.updated)
-        assert(len(buf) == 47)
+        if len(buf) != 47:
+            raise RuntimeError(f"pack: expected 47 bytes after updated, got {len(buf)}")
 
         # Header (lens.)
         buf += struct.pack("<H", self.name_len)
         buf += struct.pack("<H", self.value_len)
-        assert(len(buf) == 51)
+        if len(buf) != 51:
+            raise RuntimeError(f"pack: expected 51-byte header, got {len(buf)}")
 
         # Body (var len - limit)
         buf += self.name[:NB_NAME_LEN]

@@ -2,6 +2,14 @@ from ecdsa import VerifyingKey, SECP256k1, SigningKey
 
 
 class Keypair():
+    """ECDSA secp256k1 keypair used to sign and verify namebump requests.
+
+    Attributes:
+        private: SigningKey instance (None for verify-only use).
+        public: VerifyingKey instance.
+        vkc: 33-byte compressed public key (used as the owner identity on wire).
+    """
+
     def __init__(self, priv=None, pub=None):
         self.private = priv
         self.public = pub or priv.get_verifying_key()
