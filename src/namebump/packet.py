@@ -76,7 +76,7 @@ class Packet():
         buf += bytes([self.behavior])
 
         # Prevent replay.
-        buf += struct.pack("<Q", self.updated)
+        buf += struct.pack("<d", self.updated)
         assert(len(buf) == 47)
 
         # Header (lens.)
@@ -120,7 +120,7 @@ class Packet():
         p += 1
 
         # Timestamp.
-        updated = struct.unpack("<Q", buf[p:p + 8])[0]
+        updated = struct.unpack("<d", buf[p:p + 8])[0]
         p += 8
 
         # Name and value lengths (clamped to their declared maximums).

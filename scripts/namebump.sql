@@ -30,7 +30,7 @@ SET time_zone = "+00:00";
 CREATE TABLE `ipv4s` (
   `id` bigint UNSIGNED NOT NULL,
   `v4_val` int UNSIGNED NOT NULL,
-  `timestamp` bigint UNSIGNED NOT NULL
+  `timestamp` double NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -45,7 +45,7 @@ CREATE TABLE `ipv6s` (
   `v6_glob_extra` smallint UNSIGNED NOT NULL,
   `v6_lan_id` smallint UNSIGNED NOT NULL,
   `v6_iface_id` bigint UNSIGNED NOT NULL,
-  `timestamp` bigint UNSIGNED NOT NULL
+  `timestamp` double NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -61,8 +61,8 @@ CREATE TABLE `names` (
   `owner_pub` binary(33) NOT NULL,
   `af` tinyint UNSIGNED NOT NULL,
   `ip_id` bigint UNSIGNED NOT NULL,
-  `timestamp` bigint UNSIGNED NOT NULL,
-  `updated` bigint UNSIGNED NOT NULL
+  `timestamp` double NOT NULL,
+  `updated` double NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --

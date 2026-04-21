@@ -117,7 +117,7 @@ class Client():
 
     async def get(self, name, kp=None):
         try:
-            t = int(self.sys_clock.time())
+            t = self.sys_clock.time()
             pipe = await self.get_dest_pipe()
             vkc = kp.vkc if kp else self.reply_pk
             pkt = Packet(OP_GET, name, vkc=vkc, updated=t)
@@ -131,7 +131,7 @@ class Client():
 
     async def put(self, name, value, kp, behavior=DO_BUMP):
         try:
-            t = int(self.sys_clock.time())
+            t = self.sys_clock.time()
             pipe = await self.get_dest_pipe()
             throw_bump = behavior == THROW_BUMP
             if behavior == THROW_BUMP:
@@ -158,7 +158,7 @@ class Client():
 
     async def delete(self, name, kp):
         try:
-            t = int(self.sys_clock.time())
+            t = self.sys_clock.time()
             pipe = await self.get_dest_pipe()
             pkt = Packet(OP_DEL, name, vkc=kp.vkc, updated=t)
             await self.send_pkt(pipe, pkt, kp)

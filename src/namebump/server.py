@@ -82,7 +82,7 @@ async def v6_insert(cur, v6_glob_main, v6_glob_extra, v6_lan_id, v6_iface_id, no
         VALUES (%s, %s, %s, %s, %s)
     """
     sql_params = (int(v6_glob_main), int(v6_glob_extra), int(v6_lan_id),)
-    sql_params += (int(v6_iface_id), int(now),)
+    sql_params += (int(v6_iface_id), now,)
     await cur.execute(sql, sql_params)
 
     # Return the new row index.
@@ -143,7 +143,7 @@ async def record_v4(params, serv, now):
         # Otherwise insert the new IP and return its row ID.
         sql  = "INSERT INTO ipv4s (v4_val, timestamp) "
         sql += "VALUES (%s, %s)"
-        await cur.execute(sql, (int(ipr), int(now),))
+        await cur.execute(sql, (int(ipr), now,))
         ip_id = cur.lastrowid
 
     return ip_id
@@ -205,7 +205,7 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, req_time):
         penalty = 0
 
     # Apply penalty given req_time.
-    expiry = max(int(req_time) - penalty, 0)
+    expiry = max(req_time - penalty, 0)
 
     # Update an existing name.
     if name_exists:
@@ -222,15 +222,15 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, req_time):
         WHERE name=%s 
         AND updated != %s
         """
-        ret = await cur.execute(sql, 
+        ret = await cur.execute(sql,
             (
                 value,
                 int(af),
                 int(ip_id),
-                int(expiry),
-                int(req_time),
+                expiry,
+                req_time,
                 name,
-                int(req_time),
+                req_time,
             )
         )
         if not ret:
@@ -260,15 +260,15 @@ async def record_name(cur, serv, af, ip_id, name, value, owner_pub, req_time):
         )
         VALUES(%s, %s, %s, %s, %s, %s, %s)
         """
-        ret = await cur.execute(sql, 
+        ret = await cur.execute(sql,
             (
                 name,
-                value, 
+                value,
                 owner_pub,
                 int(af),
                 int(ip_id),
-                int(expiry),
-                int(req_time),
+                expiry,
+                req_time,
             )
         )
 
@@ -295,8 +295,8 @@ async def verified_pruning(db_con, cur, serv, updated):
     WHERE %s >= timestamp AND ((%s - timestamp) >= %s)
     """
     await cur.execute(sql, (
-        int(updated),
-        int(updated),
+        updated,
+        updated,
         int(serv.min_name_duration),
     ))
 
@@ -316,8 +316,8 @@ async def verified_pruning(db_con, cur, serv, updated):
 
 async def verified_write_name(db_con, cur, serv, behavior, name, value, owner_pub, af, ip_str, now, req_time):
     # Convert ip_str into an IPRange instance.
-    cidr = 32 if af == IP4 else 128
-    ipr = IPRange(ip_str, cidr=cidr)
+    host_limit = 0
+    ipr = IPRange(ip_str, bitlen=host_limit)
 
     # Unneeded records get deleted.
     if behavior != DONT_BUMP:
@@ -331,15 +331,18 @@ async def verified_write_name(db_con, cur, serv, behavior, name, value, owner_pu
 
     # Record name if needed and get its ID.
     name_row = await record_name(
-        cur, 
-        serv, 
-        af, 
-        ip_id, 
-        name, 
-        value, 
+        cur,
+        serv,
+        af,
+        ip_id,
+        name,
+        value,
         owner_pub,
         req_time
     )
+
+    if name_row is None:
+        raise Exception("Name write failed — duplicate timestamp or conflict.")
 
     # If we got here, everything is valid.
     await db_con.commit()
@@ -423,7 +426,6 @@ class Server(Daemon):
             vk.verify(pkt.sig, pkt.get_msg_to_sign())
 
         # Allow write or update.
-        cidr = 32 if pipe.route.af == IP4 else 128
         try:
             await verified_write_name(
                 db_con,
@@ -434,11 +436,13 @@ class Server(Daemon):
                 pkt.value,
                 pkt.vkc,
                 pipe.route.af,
-                str(IPRange(client_tup[0], cidr=cidr)),
+                str(IPRange(client_tup[0], bitlen=0)),
                 self.sys_clock.time(),
                 pkt.updated
             )
-        except ResourceLimit:
+        except (ResourceLimit, Exception) as e:
+            if not isinstance(e, ResourceLimit):
+                log_exception()
             # Indicate put failed.
             pkt.value = b""
 
@@ -477,7 +481,7 @@ class Server(Daemon):
 
             # Validate timestamp of signed req.
             if pkt.op != OP_GET:
-                now = int(self.sys_clock.time())
+                now = self.sys_clock.time()
                 if pkt.updated > (now + 5):
                     raise Exception("Invalid future update time.")
 
@@ -511,7 +515,7 @@ class Server(Daemon):
                 OP_ERROR,
                 b"Error",
                 "Unknown error occured.",
-                updated=int(self.sys_clock.time())
+                updated=self.sys_clock.time()
             )
 
             if pkt:
