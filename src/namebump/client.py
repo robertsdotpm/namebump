@@ -157,7 +157,7 @@ class Client:
             pkt = Packet(OP_GET, name, vkc=vkc, updated=t)
             await self.send_pkt(pipe, pkt, kp, sign=bool(kp))
             return await self.return_resp(pipe)
-        except asyncio.CancelledError:
+        except asyncio.CancelledError:  # pylint: disable=try-except-raise
             raise
         except (OSError, ConnectionError, asyncio.TimeoutError):
             log_exception()

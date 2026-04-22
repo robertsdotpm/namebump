@@ -63,8 +63,6 @@ from .defs import (
 class ResourceLimit(Exception):
     """Raised when a per-IP name or address allocation limit is exceeded."""
 
-    pass
-
 
 async def v6_range_usage(
     cur: Any, v6_glob_main: int, v6_glob_extra: int, v6_lan_id: int, _: Any
@@ -346,41 +344,40 @@ async def record_name(
         return row
 
     # Create a new name.
-    else:
-        # Ensure name limit is respected.
-        # [ ... active names, ? ]
-        if names_used >= name_limit:
-            raise ResourceLimit("insert name limit reached.")
+    # Ensure name limit is respected.
+    # [ ... active names, ? ]
+    if names_used >= name_limit:
+        raise ResourceLimit("insert name limit reached.")
 
-        # Insert a brand new name.
-        sql = """
-        INSERT INTO names
+    # Insert a brand new name.
+    sql = """
+    INSERT INTO names
+    (
+        name,
+        value,
+        owner_pub,
+        af,
+        ip_id,
+        timestamp,
+        updated
+    )
+    VALUES(%s, %s, %s, %s, %s, %s, %s)
+    """
+    ret = await cur.execute(
+        sql,
         (
             name,
             value,
             owner_pub,
-            af,
-            ip_id,
-            timestamp,
-            updated
-        )
-        VALUES(%s, %s, %s, %s, %s, %s, %s)
-        """
-        ret = await cur.execute(
-            sql,
-            (
-                name,
-                value,
-                owner_pub,
-                int(af),
-                int(ip_id),
-                expiry,
-                req_time,
-            ),
-        )
+            int(af),
+            int(ip_id),
+            expiry,
+            req_time,
+        ),
+    )
 
-        # Fetch the new row (so we know the ID.)
-        return await fetch_name(cur, name)
+    # Fetch the new row (so we know the ID.)
+    return await fetch_name(cur, name)
 
 
 async def verified_delete_name(db_con: Any, cur: Any, name: bytes) -> None:
