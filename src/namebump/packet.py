@@ -1,5 +1,6 @@
 import random
 import struct
+import time
 from typing import Optional, Union
 from ecdsa import VerifyingKey, SECP256k1, SigningKey, BadSignatureError
 from aionetiface.utility.utils import log_exception, to_b
@@ -36,11 +37,7 @@ class Packet:
         reply_pk: Optional[bytes] = None,
         reply_sk: Optional[SigningKey] = None,
     ) -> None:
-        if updated is not None:
-            self.updated = updated
-        else:
-            raise ValueError("Packet missing 'updated' field")
-
+        self.updated = updated if updated is not None else time.time()
         self.op = op
         self.name = to_b(name)
         self.name_len = min(len(self.name), NB_NAME_LEN)
@@ -98,8 +95,7 @@ class Packet:
 
         # ID for packet.
         buf += struct.pack("<I", self.pkid)
-        if len(buf) != 5:
-            raise RuntimeError("pack: expected 5 bytes after pkid, got {}".format(len(buf)))
+        assert len(buf) == 5, "pack: expected 5 bytes after pkid, got {}".format(len(buf))
 
         # Reply pk.
         if self.reply_pk is not None:
@@ -108,24 +104,23 @@ class Packet:
             buf += self.reply_pk
         else:
             buf += b"\0" * 33
-        if len(buf) != 38:
-            raise RuntimeError(
-                "pack: expected 38 bytes after reply_pk, got {}".format(len(buf))
-            )
+        assert len(buf) == 38, "pack: expected 38 bytes after reply_pk, got {}".format(
+            len(buf)
+        )
 
         # Behavior for changes.
         buf += bytes([self.behavior])
 
         # Prevent replay.
         buf += struct.pack("<d", self.updated)
-        if len(buf) != 47:
-            raise RuntimeError("pack: expected 47 bytes after updated, got {}".format(len(buf)))
+        assert len(buf) == 47, "pack: expected 47 bytes after updated, got {}".format(
+            len(buf)
+        )
 
         # Header (lens.)
         buf += struct.pack("<H", self.name_len)
         buf += struct.pack("<H", self.value_len)
-        if len(buf) != 51:
-            raise RuntimeError("pack: expected 51-byte header, got {}".format(len(buf)))
+        assert len(buf) == 51, "pack: expected 51-byte header, got {}".format(len(buf))
 
         # Body (var len - limit)
         buf += self.name[:NB_NAME_LEN]

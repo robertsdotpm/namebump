@@ -3,7 +3,9 @@ Unit tests for namebump packet serialization, keypair operations, and server
 helpers. These tests run without a live MySQL server or network connection.
 """
 
+import time
 import unittest
+import unittest.mock
 from namebump.packet import Packet
 from namebump.keypair import Keypair
 from namebump.defs import (
@@ -305,14 +307,67 @@ class TestGetV6Parts(unittest.TestCase):
 
 
 class TestPacketConstructionErrors(unittest.TestCase):
-    def test_missing_updated_raises(self):
+    def test_missing_updated_defaults_to_now(self):
         kp = Keypair.generate()
-        with self.assertRaises(Exception):
-            Packet(OP_GET, b"name", vkc=kp.vkc)
+        before = time.time()
+        pkt = Packet(OP_GET, b"name", vkc=kp.vkc)
+        after = time.time()
+        self.assertGreaterEqual(pkt.updated, before)
+        self.assertLessEqual(pkt.updated, after)
 
     def test_vkc_wrong_length_raises(self):
         with self.assertRaises((ValueError, AssertionError)):
             Packet(OP_GET, b"name", vkc=b"\x02" * 32, updated=FIXED_TIME)
+
+
+# ---------------------------------------------------------------------------
+# shutdown() tests
+# ---------------------------------------------------------------------------
+
+
+class TestShutdown(unittest.TestCase):
+    def test_shutdown_cancels_all_tasks(self):
+        """shutdown() must call cancel() on every task the loop reports."""
+        from unittest.mock import MagicMock
+        from namebump.server import shutdown
+
+        task1 = MagicMock()
+        task2 = MagicMock()
+        loop = MagicMock()
+        loop.all_tasks = MagicMock()
+
+        # Simulate asyncio.all_tasks(loop) returning two tasks
+        import asyncio
+        with unittest.mock.patch("asyncio.all_tasks", return_value=[task1, task2]):
+            shutdown(loop)
+
+        task1.cancel.assert_called_once()
+        task2.cancel.assert_called_once()
+
+    def test_shutdown_no_error_when_no_tasks(self):
+        """shutdown() must not raise when there are no pending tasks."""
+        from unittest.mock import MagicMock
+        from namebump.server import shutdown
+        import asyncio
+
+        loop = MagicMock()
+        with unittest.mock.patch("asyncio.all_tasks", return_value=[]):
+            shutdown(loop)  # must not raise
+
+    def test_shutdown_falls_back_to_all_tasks_class_method(self):
+        """shutdown() falls back to asyncio.Task.all_tasks() on older Python."""
+        from unittest.mock import MagicMock, patch
+        from namebump.server import shutdown
+
+        task = MagicMock()
+        loop = MagicMock()
+
+        with patch("asyncio.all_tasks", side_effect=AttributeError):
+            with patch("asyncio.Task") as mock_task_cls:
+                mock_task_cls.all_tasks = MagicMock(return_value=[task])
+                shutdown(loop)
+
+        task.cancel.assert_called_once()
 
 
 if __name__ == "__main__":

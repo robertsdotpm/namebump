@@ -14,8 +14,10 @@ class Keypair:
     def __init__(
         self, priv: Optional[SigningKey] = None, pub: Optional[VerifyingKey] = None
     ) -> None:
+        if priv is None and pub is None:
+            raise ValueError("Keypair requires at least one of priv or pub")
         self.private = priv
-        self.public = pub or priv.get_verifying_key()
+        self.public = pub if pub is not None else priv.get_verifying_key()
         self.vkc = self.public.to_string("compressed")
 
     @staticmethod

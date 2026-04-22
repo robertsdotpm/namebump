@@ -69,8 +69,10 @@ async def v6_range_usage(
 ) -> Tuple[int, int]:
     """Return the number of subnets and interfaces used within an IPv6 global prefix."""
     # Count number of subnets used.
-    sql = "SELECT COUNT(DISTINCT v6_lan_id) "
-    sql += "FROM ipv6s WHERE v6_glob_main=%s AND v6_glob_extra=%s FOR UPDATE"
+    sql = (
+        "SELECT COUNT(DISTINCT v6_lan_id) "
+        "FROM ipv6s WHERE v6_glob_main=%s AND v6_glob_extra=%s FOR UPDATE"
+    )
     await cur.execute(
         sql,
         (
@@ -81,9 +83,11 @@ async def v6_range_usage(
     v6_subnets_used = (await cur.fetchone())[0]
 
     # Count number of interfaces used.
-    sql = "SELECT COUNT(id) FROM ipv6s "
-    sql += "WHERE v6_glob_main=%s AND v6_glob_extra=%s "
-    sql += "AND v6_lan_id=%s FOR UPDATE"
+    sql = (
+        "SELECT COUNT(id) FROM ipv6s "
+        "WHERE v6_glob_main=%s AND v6_glob_extra=%s "
+        "AND v6_lan_id=%s FOR UPDATE"
+    )
     sql_params = (
         int(v6_glob_main),
         int(v6_glob_extra),
@@ -101,20 +105,24 @@ async def v6_exists(
 ) -> Tuple[bool, Optional[Any]]:
     """Check whether an IPv6 LAN segment and full interface record exist in the DB."""
     # Check if v6 subnet component exists.
-    sql = "SELECT id FROM ipv6s WHERE v6_glob_main=%s "
-    sql += "AND v6_glob_extra=%s AND v6_lan_id=%s "
-    sql_params = (
-        int(v6_glob_main),
-        int(v6_glob_extra),
-        int(v6_lan_id),
+    lan_sql = (
+        "SELECT id FROM ipv6s WHERE v6_glob_main=%s "
+        "AND v6_glob_extra=%s AND v6_lan_id=%s "
     )
-    await cur.execute(sql, sql_params)
+    await cur.execute(
+        lan_sql,
+        (
+            int(v6_glob_main),
+            int(v6_glob_extra),
+            int(v6_lan_id),
+        ),
+    )
     v6_lan_exists = (await cur.fetchone()) is not None
 
     # Check if IPv6 record exists.
-    sql += "AND v6_iface_id=%s"
+    iface_sql = lan_sql + "AND v6_iface_id=%s"
     await cur.execute(
-        sql,
+        iface_sql,
         (
             int(v6_glob_main),
             int(v6_glob_extra),
@@ -220,8 +228,7 @@ async def record_v4(params: Tuple[Any, ...], serv: Any, now: float) -> int:
         ip_id = row[0]
     else:
         # Otherwise insert the new IP and return its row ID.
-        sql = "INSERT INTO ipv4s (v4_val, timestamp) "
-        sql += "VALUES (%s, %s)"
+        sql = "INSERT INTO ipv4s (v4_val, timestamp) VALUES (%s, %s)"
         await cur.execute(
             sql,
             (
@@ -258,9 +265,10 @@ def name_limit_by_af(af: Any, serv: Any) -> int:
 async def fetch_name(cur: Any, name: bytes, lock: Any = DB_WRITE_LOCK) -> Optional[Any]:
     """Fetch a name row from the DB, optionally locking it for write."""
     # Does name already exist.
-    sql = "SELECT * FROM names WHERE name=%s "
     if lock == DB_WRITE_LOCK:
-        sql += "FOR UPDATE"
+        sql = "SELECT * FROM names WHERE name=%s FOR UPDATE"
+    else:
+        sql = "SELECT * FROM names WHERE name=%s"
 
     await cur.execute(sql, (name,))
     row = await cur.fetchone()
@@ -387,8 +395,7 @@ async def verified_delete_name(db_con: Any, cur: Any, name: bytes) -> None:
         await db_con.rollback()  # Nothing to do
         return
 
-    sql = "DELETE FROM names WHERE "
-    sql += "name = %s"
+    sql = "DELETE FROM names WHERE name = %s"
     await cur.execute(sql, (name,))
     await db_con.commit()  # Commit success
 
@@ -489,7 +496,6 @@ class Server(Daemon):
         min_name_duration: int = MIN_NAME_DURATION,
         v6_addr_expiry: int = V6_ADDR_EXPIRY,
     ) -> None:
-        self.__name__ = "NBServer"
         self.db_user = db_user
         self.db_pass = db_pass
         self.db_name = db_name
@@ -712,7 +718,7 @@ async def start_server(bind_port: int) -> "Server":
     return serv
 
 
-def _shutdown(
+def shutdown(
     loop: asyncio.AbstractEventLoop, sig: Optional[signal.Signals] = None
 ) -> None:
     """Cancel all tasks and stop the loop on SIGINT/SIGTERM."""
@@ -735,7 +741,7 @@ if __name__ == "__main__":
     if sys.platform != "win32":
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
-                loop.add_signal_handler(sig, _shutdown, loop, sig)
+                loop.add_signal_handler(sig, shutdown, loop, sig)
             except NotImplementedError:
                 pass
     # On Windows KeyboardInterrupt propagates as an exception from run_forever().
@@ -744,7 +750,7 @@ if __name__ == "__main__":
     try:
         loop.run_forever()
     except KeyboardInterrupt:
-        _shutdown(loop)
+        shutdown(loop)
     finally:
         # Wait for all tasks to finish their CancelledError handling.
         try:

@@ -214,52 +214,24 @@ class Client:
                 await pipe.close()
 
 
-async def put(
-    name: Union[str, bytes],
-    value: Union[str, bytes],
-    kp: Keypair,
-    behavior: int = DO_BUMP,
-) -> Optional[bytes]:
-    """Store a name-value pair on the default server and return the stored value."""
-    client = await Client(DEST, PK)
-    ret = await client.put(name, value, kp, behavior)
-    if ret:
-        return ret.value
-
-
-async def get(name: Union[str, bytes], kp: Optional[Keypair] = None) -> Optional[bytes]:
-    """Retrieve a value by name from the default server."""
-    client = await Client(DEST, PK)
-    ret = await client.get(name, kp)
-    if ret:
-        return ret.value
-
-
-async def delete(name: Union[str, bytes], kp: Keypair) -> Optional[bytes]:
-    """Delete a name record from the default server and return the final value."""
-    client = await Client(DEST, PK)
-    ret = await client.delete(name, kp)
-    if ret:
-        return ret.value
-
-
 if __name__ == "__main__":
 
     async def workspace():
         """Exercise the put, get, and delete client calls end-to-end against a live server."""
         name = str(rand_plain(10))
         kp = Keypair.generate()
+        client = await Client(DEST, PK)
 
-        out = await put(name, "value", kp)
+        out = await client.put(name, "value", kp)
         print(out)
 
-        out = await get(name)
+        out = await client.get(name)
         print(out)
 
-        out = await delete(name, kp)
+        out = await client.delete(name, kp)
         print(out)
 
-        out = await get(name, kp)
+        out = await client.get(name, kp)
         print(out)
 
     async_run(workspace())
