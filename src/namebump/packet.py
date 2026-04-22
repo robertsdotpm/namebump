@@ -1,11 +1,12 @@
-import time
 import random
 import struct
+from typing import Optional, Union
 from ecdsa import VerifyingKey, SECP256k1, SigningKey, BadSignatureError
-from aionetiface.utility.utils import *
-from .defs import *
+from aionetiface.utility.utils import log_exception, to_b
+from .defs import DO_BUMP, NB_NAME_LEN, NB_VAL_LEN
 
-class Packet():
+
+class Packet:
     """Wire-protocol message for namebump get/put/delete operations.
 
     Wire layout (fixed header = 51 bytes, followed by variable-length body):
@@ -22,11 +23,23 @@ class Packet():
                   sig       – remaining bytes ECDSA signature (optional)
     """
 
-    def __init__(self, op, name, value=b"", vkc=None, sig=None, updated=None, behavior=DO_BUMP, pkid=None, reply_pk=None, reply_sk=None):
+    def __init__(
+        self,
+        op: int,
+        name: Union[bytes, str],
+        value: Union[bytes, str] = b"",
+        vkc: Optional[bytes] = None,
+        sig: Optional[bytes] = None,
+        updated: Optional[float] = None,
+        behavior: int = DO_BUMP,
+        pkid: Optional[int] = None,
+        reply_pk: Optional[bytes] = None,
+        reply_sk: Optional[SigningKey] = None,
+    ) -> None:
         if updated is not None:
             self.updated = updated
         else:
-            raise Exception("packet update time not set.")
+            raise ValueError("Packet missing 'updated' field")
 
         self.op = op
         self.name = to_b(name)
@@ -36,19 +49,23 @@ class Packet():
         self.vkc = vkc
         self.sig = sig
         self.behavior = behavior
-        self.pkid = pkid or random.randrange(0, 2 ** 32)
+        self.pkid = pkid or random.randrange(0, 2**32)
 
         self.reply_pk = reply_pk
         self.reply_sk = reply_sk
         if vkc is not None:
             if len(vkc) != 33:
-                raise ValueError(f"vkc must be 33 bytes (compressed public key), got {len(vkc)}")
+                raise ValueError(
+                    f"vkc must be 33 bytes (compressed public key), got {len(vkc)}"
+                )
 
-    def gen_reply_key(self):
+    def gen_reply_key(self) -> None:
+        """Generate a fresh ephemeral ECDSA reply key pair and attach it to this packet."""
         self.reply_sk = SigningKey.generate(curve=SECP256k1)
         self.reply_pk = self.reply_sk.get_verifying_key().to_string("compressed")
 
-    def get_msg_to_sign(self):
+    def get_msg_to_sign(self) -> bytes:
+        """Return the canonical serialised bytes that the signature covers."""
         return Packet(
             self.op,
             self.name,
@@ -61,7 +78,8 @@ class Packet():
             reply_pk=self.reply_pk,
         ).pack()
 
-    def is_valid_sig(self):
+    def is_valid_sig(self) -> bool:
+        """Return True if the packet's ECDSA signature is valid for its vkc owner key."""
         vk = VerifyingKey.from_string(self.vkc, curve=SECP256k1)
         msg = self.get_msg_to_sign()
         try:
@@ -72,7 +90,8 @@ class Packet():
             log_exception()
             return False
 
-    def pack(self):
+    def pack(self) -> bytes:
+        """Serialise the packet to its wire-format byte string."""
         buf = b""
 
         buf += bytes([self.op])
@@ -90,7 +109,9 @@ class Packet():
         else:
             buf += b"\0" * 33
         if len(buf) != 38:
-            raise RuntimeError(f"pack: expected 38 bytes after reply_pk, got {len(buf)}")
+            raise RuntimeError(
+                f"pack: expected 38 bytes after reply_pk, got {len(buf)}"
+            )
 
         # Behavior for changes.
         buf += bytes([self.behavior])
@@ -109,7 +130,7 @@ class Packet():
         # Body (var len - limit)
         buf += self.name[:NB_NAME_LEN]
         buf += self.value[:NB_VAL_LEN]
-        
+
         # Variable length.
         if self.vkc is not None:
             buf += self.vkc
@@ -117,9 +138,10 @@ class Packet():
             buf += self.sig
 
         return buf
-    
+
     @staticmethod
-    def unpack(buf):
+    def unpack(buf: bytes) -> "Packet":
+        """Deserialise a wire-format buffer into a Packet instance."""
         # Point at start of buffer.
         p = 0
 
@@ -128,11 +150,11 @@ class Packet():
         p += 1
 
         # Packet ID.
-        pkid = struct.unpack("<I", buf[p:p + 4])[0]
+        pkid = struct.unpack("<I", buf[p : p + 4])[0]
         p += 4
 
         # Reply pk.
-        reply_pk = buf[p:p + 33]
+        reply_pk = buf[p : p + 33]
         p += 33
         if reply_pk == b"\0" * 33:
             reply_pk = None
@@ -142,25 +164,24 @@ class Packet():
         p += 1
 
         # Timestamp.
-        updated = struct.unpack("<d", buf[p:p + 8])[0]
+        updated = struct.unpack("<d", buf[p : p + 8])[0]
         p += 8
 
         # Name and value lengths (clamped to their declared maximums).
-        name_len = min(struct.unpack("<H", buf[p:p + 2])[0], NB_NAME_LEN)
+        name_len = min(struct.unpack("<H", buf[p : p + 2])[0], NB_NAME_LEN)
         p += 2
-        val_len = min(struct.unpack("<H", buf[p:p + 2])[0], NB_VAL_LEN)
+        val_len = min(struct.unpack("<H", buf[p : p + 2])[0], NB_VAL_LEN)
         p += 2
 
         # Name and value bodies.
-        name = buf[p:p + name_len]
+        name = buf[p : p + name_len]
         p += name_len
-        val = buf[p:p + val_len]
+        val = buf[p : p + val_len]
         p += val_len
 
         # Compressed verifying key and signature.
-        vkc = buf[p:p + 33]
+        vkc = buf[p : p + 33]
         p += 33
         sig = buf[p:]
 
         return Packet(op, name, val, vkc, sig, updated, behavior, pkid, reply_pk)
-

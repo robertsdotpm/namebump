@@ -6,18 +6,31 @@ a bunch of other non-sense.
 """
 
 import time
+import asyncio
+from typing import Any, Optional, Tuple, Union
 from ecdsa import SECP256k1, SigningKey
-from aionetiface import *
-from aionetiface.utility.sys_clock import *
-from aionetiface.vendor.ecies import *
-from .packet import *
-from .keypair import *
-from .defs import *
+from aionetiface import (
+    Interface,
+    Address,
+    Pipe,
+    TCP,
+    VALID_LOCALHOST,
+    log_exception,
+    h_to_b,
+    async_run,
+    rand_plain,
+    proto_recv,
+)
+from aionetiface.vendor.ecies import encrypt, decrypt
+from .packet import Packet
+from .keypair import Keypair
+from .defs import OP_GET, OP_PUT, OP_DEL, DO_BUMP, DONT_BUMP, THROW_BUMP
 
 DEST = ("ovh1.p2pd.net", 5300)
 PK = h_to_b("03f20b5dcfa5d319635a34f18cb47b339c34f515515a5be733cd7a7f8494e97136")
 
-class Client():
+
+class Client:
     """Async client for a single namebump server.
 
     Usage:
@@ -30,7 +43,14 @@ class Client():
     request, reads the encrypted reply, then closes the connection.
     """
 
-    def __init__(self, dest, dest_pk, sys_clock=None, nic=None):
+    def __init__(
+        self,
+        dest: Tuple[str, int],
+        dest_pk: bytes,
+        sys_clock: Optional[Any] = None,
+        nic: Optional[Any] = None,
+    ) -> None:
+        """Initialize the client with a server address, its public key, and optional clock/NIC."""
         if not isinstance(dest_pk, bytes) or len(dest_pk) != 33:
             raise ValueError("dest_pk must be a 33-byte compressed public key")
 
@@ -46,7 +66,8 @@ class Client():
         self.af = None
         self.addr = None
 
-    async def start(self):
+    async def start(self) -> "Client":
+        """Resolve the server address and initialise the NIC and clock; return self."""
         if not self.sys_clock:
             self.sys_clock = time
 
@@ -66,14 +87,16 @@ class Client():
                 continue
 
         if not self.af:
-            raise Exception("Dest AF is not supported by NIC.")
-        
+            raise ConnectionError("Dest AF is not supported by NIC.")
+
         return self
 
-    def __await__(self):
+    def __await__(self) -> Any:
+        """Allow ``await Client(...)`` as a shorthand for ``await Client(...).start()``."""
         return self.start().__await__()
 
-    async def get_dest_pipe(self):
+    async def get_dest_pipe(self) -> Any:
+        """Open and return a fresh TCP pipe to the namebump server."""
         route = self.nic.route(self.af)
 
         # Bind to the loopback address explicitly so the connection succeeds.
@@ -88,14 +111,15 @@ class Client():
         try:
             pipe = await Pipe(TCP, self.addr, route).connect()
             if pipe is None:
-                raise Exception("Could not connect to namebump server.")
+                raise ConnectionError("Could not connect to namebump server.")
 
             return pipe
         except (OSError, ConnectionError, asyncio.TimeoutError):
             log_exception()
             raise
 
-    async def return_resp(self, pipe):
+    async def return_resp(self, pipe: Any) -> Packet:
+        """Read, decrypt, and deserialise the server's response from the pipe."""
         buf = await proto_recv(pipe)
         buf = decrypt(self.reply_sk, buf)
         pkt = Packet.unpack(buf)
@@ -103,7 +127,10 @@ class Client():
             pkt.value = None
         return pkt
 
-    async def send_pkt(self, pipe, pkt, kp, sign=True):
+    async def send_pkt(
+        self, pipe: Any, pkt: Packet, kp: Optional[Keypair], sign: bool = True
+    ) -> None:
+        """Serialise, optionally sign, encrypt, and send a packet to the server."""
         pkt.reply_pk = self.reply_pk
         msg = pkt.get_msg_to_sign()
         if sign:
@@ -118,7 +145,10 @@ class Client():
         if not send_success:
             raise IOError("client send pkt failure")
 
-    async def get(self, name, kp=None):
+    async def get(
+        self, name: Union[str, bytes], kp: Optional[Keypair] = None
+    ) -> Packet:
+        """Fetch the value for name, optionally identifying the caller with a keypair."""
         pipe = None
         try:
             t = self.sys_clock.time()
@@ -136,7 +166,14 @@ class Client():
             if pipe is not None:
                 await pipe.close()
 
-    async def put(self, name, value, kp, behavior=DO_BUMP):
+    async def put(
+        self,
+        name: Union[str, bytes],
+        value: Union[str, bytes],
+        kp: Keypair,
+        behavior: int = DO_BUMP,
+    ) -> Packet:
+        """Write a signed name-value pair to the server, applying the given bump behavior."""
         pipe = None
         try:
             t = self.sys_clock.time()
@@ -160,7 +197,8 @@ class Client():
             if pipe is not None:
                 await pipe.close()
 
-    async def delete(self, name, kp):
+    async def delete(self, name: Union[str, bytes], kp: Keypair) -> Packet:
+        """Send a signed delete request for name and return the server's response."""
         pipe = None
         try:
             t = self.sys_clock.time()
@@ -175,22 +213,38 @@ class Client():
             if pipe is not None:
                 await pipe.close()
 
-async def put(name, value, kp, behavior=DO_BUMP):
+
+async def put(
+    name: Union[str, bytes],
+    value: Union[str, bytes],
+    kp: Keypair,
+    behavior: int = DO_BUMP,
+) -> Optional[bytes]:
+    """Store a name-value pair on the default server and return the stored value."""
     client = await Client(DEST, PK)
     ret = await client.put(name, value, kp, behavior)
-    if ret: return ret.value
+    if ret:
+        return ret.value
 
-async def get(name, kp=None):
+
+async def get(name: Union[str, bytes], kp: Optional[Keypair] = None) -> Optional[bytes]:
+    """Retrieve a value by name from the default server."""
     client = await Client(DEST, PK)
     ret = await client.get(name, kp)
-    if ret: return ret.value
+    if ret:
+        return ret.value
 
-async def delete(name, kp):
+
+async def delete(name: Union[str, bytes], kp: Keypair) -> Optional[bytes]:
+    """Delete a name record from the default server and return the final value."""
     client = await Client(DEST, PK)
     ret = await client.delete(name, kp)
-    if ret: return ret.value
+    if ret:
+        return ret.value
+
 
 if __name__ == "__main__":
+
     async def workspace():
         name = str(rand_plain(10))
         kp = Keypair.generate()

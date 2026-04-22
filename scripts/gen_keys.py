@@ -1,4 +1,4 @@
-from aionetiface import *
+from aionetiface import fstr, to_h
 from ecdsa import SECP256k1, SigningKey
 
 if __name__ == "__main__":

@@ -3,14 +3,19 @@ Unit tests for namebump packet serialization, keypair operations, and server
 helpers. These tests run without a live MySQL server or network connection.
 """
 
-import struct
 import unittest
 from namebump.packet import Packet
 from namebump.keypair import Keypair
 from namebump.defs import (
-    OP_GET, OP_PUT, OP_DEL, OP_ERROR,
-    DO_BUMP, DONT_BUMP, THROW_BUMP,
-    NB_NAME_LEN, NB_VAL_LEN,
+    OP_GET,
+    OP_PUT,
+    OP_DEL,
+    OP_ERROR,
+    DO_BUMP,
+    DONT_BUMP,
+    THROW_BUMP,
+    NB_NAME_LEN,
+    NB_VAL_LEN,
 )
 from namebump.server import get_v6_parts
 
@@ -22,10 +27,17 @@ FIXED_TIME = 1_700_000_000.0
 # Packet round-trip tests
 # ---------------------------------------------------------------------------
 
-class TestPacketRoundTrip(unittest.TestCase):
 
-    def _make_packet(self, op=OP_GET, name=b"testname", value=b"testvalue",
-                     vkc=None, behavior=DO_BUMP, reply_pk=None):
+class TestPacketRoundTrip(unittest.TestCase):
+    def _make_packet(
+        self,
+        op=OP_GET,
+        name=b"testname",
+        value=b"testvalue",
+        vkc=None,
+        behavior=DO_BUMP,
+        reply_pk=None,
+    ):
         kp = Keypair.generate()
         return Packet(
             op=op,
@@ -153,12 +165,13 @@ class TestPacketRoundTrip(unittest.TestCase):
 # Signature tests
 # ---------------------------------------------------------------------------
 
-class TestPacketSignature(unittest.TestCase):
 
+class TestPacketSignature(unittest.TestCase):
     def _signed_packet(self, op=OP_PUT):
         kp = Keypair.generate()
-        pkt = Packet(op=op, name=b"myname", value=b"myval",
-                     vkc=kp.vkc, updated=FIXED_TIME)
+        pkt = Packet(
+            op=op, name=b"myname", value=b"myval", vkc=kp.vkc, updated=FIXED_TIME
+        )
         msg = pkt.get_msg_to_sign()
         pkt.sig = kp.private.sign(msg)
         return pkt, kp
@@ -218,8 +231,8 @@ class TestPacketSignature(unittest.TestCase):
 # Keypair tests
 # ---------------------------------------------------------------------------
 
-class TestKeypair(unittest.TestCase):
 
+class TestKeypair(unittest.TestCase):
     def test_generate_produces_valid_keypair(self):
         kp = Keypair.generate()
         self.assertIsNotNone(kp.private)
@@ -243,6 +256,7 @@ class TestKeypair(unittest.TestCase):
 
     def test_keypair_from_existing_private_key(self):
         from ecdsa import SigningKey, SECP256k1
+
         sk = SigningKey.generate(curve=SECP256k1)
         kp = Keypair(priv=sk)
         self.assertEqual(kp.public, sk.get_verifying_key())
@@ -252,16 +266,18 @@ class TestKeypair(unittest.TestCase):
 # get_v6_parts tests
 # ---------------------------------------------------------------------------
 
-class TestGetV6Parts(unittest.TestCase):
 
+class TestGetV6Parts(unittest.TestCase):
     def test_known_address_parses_correctly(self):
         from aionetiface import IPRange
+
         ipr = IPRange("2001:0db8:85a3:0000:0000:8a2e:0370:7334", bitlen=0)
         parts = get_v6_parts(ipr)
         self.assertEqual(len(parts), 4)
 
     def test_returns_four_integers(self):
         from aionetiface import IPRange
+
         ipr = IPRange("fe80:0000:0000:0000:0202:b3ff:fe1e:8329", bitlen=0)
         parts = get_v6_parts(ipr)
         for part in parts:
@@ -269,6 +285,7 @@ class TestGetV6Parts(unittest.TestCase):
 
     def test_different_addresses_give_different_glob_main(self):
         from aionetiface import IPRange
+
         ipr1 = IPRange("2001:0db8:85a3:0000:0000:8a2e:0370:7334", bitlen=0)
         ipr2 = IPRange("fe80:0000:0000:0000:0202:b3ff:fe1e:8329", bitlen=0)
         parts1 = get_v6_parts(ipr1)
@@ -277,6 +294,7 @@ class TestGetV6Parts(unittest.TestCase):
 
     def test_same_address_consistent_results(self):
         from aionetiface import IPRange
+
         ipr = IPRange("2001:0db8:85a3:0000:0000:8a2e:0370:7334", bitlen=0)
         self.assertEqual(get_v6_parts(ipr), get_v6_parts(ipr))
 
@@ -285,8 +303,8 @@ class TestGetV6Parts(unittest.TestCase):
 # Packet construction error tests
 # ---------------------------------------------------------------------------
 
-class TestPacketConstructionErrors(unittest.TestCase):
 
+class TestPacketConstructionErrors(unittest.TestCase):
     def test_missing_updated_raises(self):
         kp = Keypair.generate()
         with self.assertRaises(Exception):
