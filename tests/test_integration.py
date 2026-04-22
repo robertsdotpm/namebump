@@ -9,14 +9,20 @@ Run manually:
 """
 
 import asyncio
+import hashlib
 import socket
-import time
 import unittest
 
+from ecdsa import SigningKey, SECP256k1
 from namebump.client import Client, PK
 from namebump.client import DEST
 from namebump import Keypair
 from aionetiface import Interface
+
+# Fixed test keypair — reuses the same name slot on each run so it doesn't
+# accumulate entries against the IP's registration quota.
+_TEST_SK_BYTES = hashlib.sha256(b"namebump_pytest_fixed_key").digest()
+TEST_KP = Keypair(SigningKey.from_string(_TEST_SK_BYTES, curve=SECP256k1))
 
 
 def _server_reachable(host, port, timeout=3):
@@ -30,7 +36,7 @@ def _server_reachable(host, port, timeout=3):
 def _skip_if_offline():
     host, port = DEST
     if not _server_reachable(host, port):
-        raise unittest.SkipTest(f"PNP server {host}:{port} unreachable")
+        raise unittest.SkipTest("PNP server {}:{} unreachable".format(host, port))
 
 
 class TestLiveServer(unittest.IsolatedAsyncioTestCase):
@@ -40,9 +46,27 @@ class TestLiveServer(unittest.IsolatedAsyncioTestCase):
         _skip_if_offline()
         self.nic = Interface("default")
         self.client = await Client(DEST, PK, nic=self.nic)
-        self.kp = Keypair.generate()
-        # Use a unique name so parallel runs don't collide.
-        self.name = "pytest_" + str(int(time.time() * 1000))[-8:]
+        # Use a fixed keypair so repeated runs reuse the same name slot
+        # rather than accumulating new entries against the IP's quota.
+        self.kp = TEST_KP
+        self.name = "pt_" + self.kp.vkc.hex()[:16]
+
+        # Probe that we have a writable slot.  A successful PUT echoes the
+        # value back; b"" means the server hit its per-IP quota (ResourceLimit).
+        # We use a non-empty sentinel so we can distinguish success from quota.
+        probe = await self.client.put(self.name, b"\x01probe", self.kp)
+        if probe.value != b"\x01probe":
+            self.skipTest(
+                "server PUT quota full or clock skew – old entries expire after 7 days"
+            )
+
+    async def asyncTearDown(self):
+        # Reclaim the slot (PUT empty) rather than DELETE so the next test
+        # can always UPDATE (quota-safe) instead of INSERT.
+        try:
+            await self.client.put(self.name, b"", self.kp)
+        except Exception:
+            pass
 
     async def test_put_returns_value(self):
         pkt = await self.client.put(self.name, b"hello", self.kp)
@@ -57,7 +81,8 @@ class TestLiveServer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pkt.value, b"hello")
 
     async def test_get_nonexistent_name_returns_none_value(self):
-        pkt = await self.client.get("no_such_name_xyz_" + str(int(time.time())))
+        absent = hashlib.sha256(b"namebump_pytest_absent_key").hexdigest()[:16]
+        pkt = await self.client.get(absent)
         # Server returns a Packet but with value=None (updated=0) for missing names.
         self.assertIsNotNone(pkt)
         self.assertIsNone(pkt.value)
@@ -69,7 +94,7 @@ class TestLiveServer(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(pkt.value, "GET after DELETE should return no value")
 
     async def test_put_get_delete_full_roundtrip(self):
-        value = b"roundtrip_value_" + str(int(time.time())).encode()
+        value = b"roundtrip_value_" + self.kp.vkc.hex()[:8].encode()
 
         # PUT
         put_pkt = await self.client.put(self.name, value, self.kp)

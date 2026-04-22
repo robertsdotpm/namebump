@@ -5,9 +5,11 @@ for create to allow pending but limit it.
 """
 
 import asyncio
+import hashlib
 import os
 import unittest
 import aiomysql
+from ecdsa import SigningKey, SECP256k1
 from aionetiface import (
     Interface,
     SysClock,
@@ -29,25 +31,19 @@ from namebump.server import Server, verified_pruning
 from aionetiface.utility.utils import to_b
 
 
-"""
-Don't use a fixed key so randoms can't screw with the tests.
-Not that you want to run this on production anyway.
-"""
-NB_LOCAL_SK = Keypair.generate()
+_LOCAL_SK_BYTES = hashlib.sha256(b"nb_server_test_key").digest()
+NB_LOCAL_SK = Keypair(SigningKey.from_string(_LOCAL_SK_BYTES, curve=SECP256k1))
 NB_TEST_PORT = NB_PORT
 NB_TEST_ENC_PK = b"\x03\x85\x97u\xb1z\xcf\xbb\xf0U0!\x9d\xe9\x8bI\xbc\xf10\xba1\xd4\xa2k\xdb\xbd\xddy\xb7\x07\x94\n\xd8"
 NB_TEST_ENC_SK = b"\x98\x0b\x0e\xfb\x99\xa0\xab\xf8t\x10\xb9\xaf\x10\x97\xb3\xaaI\xa4!@\xfc\xfbZ\xeftO\t)km\x9bi"
 NB_TEST_DB_PASS = ""
-NB_TEST_NAME = b"NB_test_name"
+NB_TEST_NAME = NB_LOCAL_SK.vkc.hex()[:16].encode()
 NB_TEST_VALUE = b"NB_test_value"
 NB_TEST_DB_USER = "root"
 NB_TEST_DB_NAME = "pnp"
 NB_TEST_IPS = {IP4: "127.0.0.1", IP6: "::1"}
 
-if "NB_DB_PW" in os.environ:
-    NB_TEST_DB_PASS = os.environ["NB_DB_PW"]
-else:
-    NB_TEST_DB_PASS = input("db pass: ")
+NB_TEST_DB_PASS = os.environ.get("NB_DB_PW", "")
 
 
 async def NB_clear_tables():
@@ -125,7 +121,7 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
             await client.put(NB_TEST_NAME, buf, NB_LOCAL_SK)
 
             pkt = await client.get(NB_TEST_NAME)
-            assert pkt.value == buf
+            self.assertEqual(pkt.value, buf)
 
         await serv.close()
 
@@ -170,10 +166,10 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
         # After everything runs both tables should be empty.
         async with db_con.cursor() as cur:
             for t in ["ipv6s", "names"]:
-                sql = f"SELECT COUNT(*) FROM {t} WHERE 1=1"
+                sql = "SELECT COUNT(*) FROM {} WHERE 1=1".format(t)
                 await cur.execute(sql)
                 no = (await cur.fetchone())[0]
-                assert no == 0
+                self.assertEqual(no, 0)
 
         db_con.close()
         await serv.close()
@@ -188,7 +184,7 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
             await clients[af].put(NB_TEST_NAME, evil_val, NB_LOCAL_SK)
 
             ret = await clients[af].get(NB_TEST_NAME)
-            assert ret.value == evil_val
+            self.assertEqual(ret.value, evil_val)
 
         await serv.close()
 
@@ -202,7 +198,7 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
             # Test value was stored by retrieval.
             ret = await clients[af].get(NB_TEST_NAME)
-            assert ret.value == NB_TEST_VALUE
+            self.assertEqual(ret.value, NB_TEST_VALUE)
             # assert(ret.vkc == clients[af].reply_pk)
 
             # Ensure new timestamp greater than old.
@@ -213,8 +209,8 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
             # Test value was stored by retrieval.
             ret = await clients[af].get(NB_TEST_NAME, NB_LOCAL_SK)
-            assert ret.value == (NB_TEST_VALUE + b"changed")
-            assert ret.vkc == NB_LOCAL_SK.vkc
+            self.assertEqual(ret.value, (NB_TEST_VALUE + b"changed"))
+            self.assertEqual(ret.vkc, NB_LOCAL_SK.vkc)
 
             # NOTE: Later update times are less due to penalty calculations.
             # Expected behavior as far as I can think.
@@ -222,12 +218,12 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
             # Now delete the value.
             ret = await clients[af].delete(NB_TEST_NAME, NB_LOCAL_SK)
-            assert ret.vkc == NB_LOCAL_SK.vkc
+            self.assertEqual(ret.vkc, NB_LOCAL_SK.vkc)
 
             # Test value was deleted.
             ret = await clients[af].get(NB_TEST_NAME)
-            assert ret.value is None
-            assert ret.vkc == clients[af].reply_pk
+            self.assertIsNone(ret.value)
+            self.assertEqual(ret.vkc, clients[af].reply_pk)
 
         await serv.close()
 
@@ -259,7 +255,7 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
             # Ensure AF is valid.
             is_valid = await is_af_valid(af_x)
-            assert is_valid
+            self.assertTrue(is_valid)
 
             # Migrate the name to a different address.
             for af_y in VALID_AFS:
@@ -275,11 +271,11 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
                 # Ensure the AF is valid.
                 is_valid = await is_af_valid(af_y)
-                assert is_valid
+                self.assertTrue(is_valid)
 
                 # Test fetch.
                 ret = await clients[af_y].get(NB_TEST_NAME)
-                assert ret.value == NB_TEST_VALUE
+                self.assertEqual(ret.value, NB_TEST_VALUE)
 
         await serv.close()
 
@@ -295,7 +291,7 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
             # Fill the stack.
             for i in range(0, name_limit):
-                await clients[af].put(f"{i}", "val", NB_LOCAL_SK)
+                await clients[af].put(str(i), "val", NB_LOCAL_SK)
                 await asyncio.sleep(1)
 
             # Other names expire here.
@@ -304,7 +300,7 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
             # Now pop the oldest.
             await clients[af].put("3", "val", NB_LOCAL_SK)
             ret = await clients[af].get("3")
-            assert ret.value == b"val"
+            self.assertEqual(ret.value, b"val")
 
             # Cleanup server.
             await serv.close()
@@ -346,7 +342,7 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
             # Fill the stack past name_limit.
             for i in range(1, name_limit + 2):
                 try:
-                    await clients[af].put(f"{i}", "val", NB_LOCAL_SK)
+                    await clients[af].put(str(i), "val", NB_LOCAL_SK)
                 except KeyError:
                     pass
 
@@ -354,12 +350,12 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
             # Check values still exist.
             for i in range(1, name_limit + 1):
-                ret = await clients[af].get(f"{i}")
-                assert ret.value == b"val"
+                ret = await clients[af].get(str(i))
+                self.assertEqual(ret.value, b"val")
 
             # Check insert over limit rejected.
             ret = await clients[af].get("4")
-            assert ret.value is None
+            self.assertIsNone(ret.value)
             await serv.close()
 
     async def test_bump_exception(self):
@@ -376,7 +372,7 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
             except KeyError:
                 throw_set = True
 
-            assert throw_set
+            self.assertTrue(throw_set)
             await serv.close()
 
     async def test_NB_respect_owner_access(self):
@@ -387,19 +383,26 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
         bob = {}
         sys_clock = SysClock(i, ntp=1766450948)
 
+        _alice_sk = Keypair(SigningKey.from_string(
+            hashlib.sha256(b"nb_server_test_alice").digest(), curve=SECP256k1
+        ))
+        _bob_sk = Keypair(SigningKey.from_string(
+            hashlib.sha256(b"nb_server_test_bob").digest(), curve=SECP256k1
+        ))
+
         for af in VALID_AFS:
             dest = (NB_TEST_IPS[af], NB_TEST_PORT)
             alice[af] = await Client(dest, NB_TEST_ENC_PK, sys_clock, i)
-            alice[af].kp = Keypair.generate()
+            alice[af].kp = _alice_sk
             bob[af] = await Client(dest, NB_TEST_ENC_PK, sys_clock, i)
-            bob[af].kp = Keypair.generate()
+            bob[af].kp = _bob_sk
 
-        test_name = b"some_name"
+        test_name = _alice_sk.vkc.hex()[:16].encode()
         alice_val = b"alice_val"
         for af in VALID_AFS:
             await NB_clear_tables()
 
-            assert alice[af].kp.vkc != bob[af].kp.vkc
+            self.assertNotEqual(alice[af].kp.vkc, bob[af].kp.vkc)
             await alice[af].put(test_name, alice_val, alice[af].kp)
             await asyncio.sleep(2)
 
@@ -409,7 +412,7 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
             # The changes aren't saved then.
             ret = await bob[af].get(test_name)
-            assert ret.value == alice_val
+            self.assertEqual(ret.value, alice_val)
 
         await serv.close()
 
@@ -421,7 +424,7 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
 
             # Fill up the name queue.
             for i in range(0, name_limit):
-                await clients[af].put(f"{i}", f"{i}", NB_LOCAL_SK, DONT_BUMP)
+                await clients[af].put(str(i), str(i), NB_LOCAL_SK, DONT_BUMP)
                 await asyncio.sleep(2)
 
             # Ols names expire.
@@ -430,12 +433,12 @@ class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
             # Normally this would bump one.
             await clients[af].put("3", "3", NB_LOCAL_SK, DONT_BUMP)
             ret = await clients[af].get("3")
-            assert ret.value is None
+            self.assertIsNone(ret.value)
 
             # All original values should exist.
             for i in range(0, name_limit):
-                ret = await clients[af].get(f"{i}")
-                assert ret.value == to_b(f"{i}")
+                ret = await clients[af].get(str(i))
+                self.assertEqual(ret.value, to_b(str(i)))
 
             await serv.close()
 
@@ -526,13 +529,13 @@ New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:3333:0000:0000:000
             client.get_dest_pipe = get_dest_pipe
 
             # Test out the vector.
-            await client.put(f"{offset}", f"{offset}", NB_LOCAL_SK)
+            await client.put(str(offset), str(offset), NB_LOCAL_SK)
             await asyncio.sleep(2)
-            ret = await client.get(f"{offset}")
+            ret = await client.get(str(offset))
             if ret.value is None:
-                assert expect is None
+                self.assertIsNone(expect)
             else:
-                assert expect == to_b(f"{offset}")
+                self.assertEqual(expect, to_b(str(offset)))
 
         # Cleanup.
         await serv.close()
@@ -583,13 +586,13 @@ New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:3333:0000:0000:000
             client.get_dest_pipe = get_dest_pipe
 
             # Test out the vector.
-            await client.put(f"{offset}", f"{offset}", NB_LOCAL_SK)
+            await client.put(str(offset), str(offset), NB_LOCAL_SK)
             await asyncio.sleep(2)
-            ret = await client.get(f"{offset}")
+            ret = await client.get(str(offset))
             if ret.value is None:
-                assert expect is None
+                self.assertIsNone(expect)
             else:
-                assert expect == to_b(f"{offset}")
+                self.assertEqual(expect, to_b(str(offset)))
 
         db_con = await aiomysql.connect(
             user=NB_TEST_DB_USER, password=NB_TEST_DB_PASS, db=NB_TEST_DB_NAME
@@ -598,12 +601,12 @@ New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:3333:0000:0000:000
         async with db_con.cursor() as cur:
             await cur.execute("SELECT COUNT(id)FROM ipv6s WHERE 1=1")
             ret = (await cur.fetchone())[0]
-            assert ret == len(vectors)
+            self.assertEqual(ret, len(vectors))
 
         db_con.close()
 
         for offset in range(0, len(vectors)):
-            await client.delete(f"{offset}", NB_LOCAL_SK)
+            await client.delete(str(offset), NB_LOCAL_SK)
 
         # Should delete all past ipv6s not associated with a name.
         await client.put("new", "something", NB_LOCAL_SK)
@@ -615,7 +618,7 @@ New-NetIPAddress -InterfaceIndex 4 -IPAddress "fe80:3456:7890:3333:0000:0000:000
         async with db_con.cursor() as cur:
             await cur.execute("SELECT COUNT(id)FROM ipv6s WHERE 1=1")
             ret = (await cur.fetchone())[0]
-            assert ret == 1
+            self.assertEqual(ret, 1)
 
         db_con.close()
 

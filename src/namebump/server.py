@@ -23,7 +23,7 @@ import signal
 import asyncio
 import aiomysql
 from typing import Any, Optional, Tuple
-from ecdsa import VerifyingKey, SECP256k1, SigningKey
+from ecdsa import VerifyingKey, SECP256k1, SigningKey, BadSignatureError
 from aionetiface import (
     Interface,
     SysClock,
@@ -239,13 +239,13 @@ async def record_v4(params: Tuple[Any, ...], serv: Any, now: float) -> int:
 async def record_ip(af: Any, params: Tuple[Any, ...], serv: Any, now: float) -> int:
     """Dispatch to the AF-specific IP recorder and return the resulting row ID."""
     if af == IP6:
-        ip_id = await record_v6(params, serv, now)
+        return await record_v6(params, serv, now)
 
     # Load existing ip_id or create it - V4.
     if af == IP4:
-        ip_id = await record_v4(params, serv, now)
+        return await record_v4(params, serv, now)
 
-    return ip_id
+    raise ValueError("Unsupported address family: {}".format(af))
 
 
 def name_limit_by_af(af: Any, serv: Any) -> int:
@@ -254,6 +254,7 @@ def name_limit_by_af(af: Any, serv: Any) -> int:
         return serv.v4_name_limit
     if af == IP6:
         return serv.v6_name_limit
+    raise ValueError("Unsupported address family: {}".format(af))
 
 
 async def fetch_name(cur: Any, name: bytes, lock: Any = DB_WRITE_LOCK) -> Optional[Any]:
@@ -345,7 +346,7 @@ async def record_name(
         return row
 
     # Create a new name.
-    if not name_exists:
+    else:
         # Ensure name limit is respected.
         # [ ... active names, ? ]
         if names_used >= name_limit:
@@ -508,6 +509,7 @@ class Server(Daemon):
         super().__init__()
 
     def serv_resp(self, pkt: Packet) -> bytes:
+        """Serialise a response packet, optionally encrypting it with the requester's reply key."""
         reply_pk = pkt.reply_pk
 
         # Replace received packet reply address with our own.
@@ -523,13 +525,16 @@ class Server(Daemon):
         return buf
 
     def set_debug(self, val: bool) -> None:
+        """Enable or disable verbose debug output."""
         self.debug = val
 
     def set_v6_limits(self, v6_subnet_limit: int, v6_iface_limit: int) -> None:
+        """Set per-subnet and per-interface IPv6 registration limits."""
         self.v6_subnet_limit = v6_subnet_limit
         self.v6_iface_limit = v6_iface_limit
 
     async def handle_get(self, pipe: Any, cur: Any, pkt: Packet) -> None:
+        """Look up a name in the database and send its current value back to the client."""
         row = await fetch_name(cur, pkt.name, DB_READ_LOCK)
         if row:
             resp = Packet(
@@ -557,6 +562,7 @@ class Server(Daemon):
     async def handle_put(
         self, pipe: Any, cur: Any, db_con: Any, pkt: Packet, client_tup: Tuple[str, int]
     ) -> None:
+        """Validate the packet signature and write or update a name record in the database."""
         # Validate signature.
         if not pkt.sig or not pkt.is_valid_sig():
             raise PermissionError("PUT requires valid signature")
@@ -589,6 +595,7 @@ class Server(Daemon):
         await proto_send(pipe, self.serv_resp(pkt))
 
     async def handle_del(self, pipe: Any, cur: Any, db_con: Any, pkt: Packet) -> None:
+        """Verify the packet signature and remove the named record from the database."""
         if not pkt.sig:
             raise PermissionError("DEL requires signature")
 
@@ -608,6 +615,7 @@ class Server(Daemon):
         await proto_send(pipe, self.serv_resp(pkt))
 
     async def msg_cb(self, msg: bytes, client_tup: Tuple[str, int], pipe: Any) -> None:
+        """Decrypt an incoming client message, dispatch it to the appropriate handler, and send a reply."""
         pkt = None
         try:
             # Decrypt and serialise packet.
@@ -642,7 +650,7 @@ class Server(Daemon):
                         return await self.handle_del(pipe, cur, db_con, pkt)
 
                     raise ValueError("Unknown pkt.op")
-        except (OSError, ValueError, KeyError, PermissionError):
+        except (OSError, ValueError, KeyError, PermissionError, BadSignatureError):
             log_exception()
             error_pkt = Packet(
                 OP_ERROR,

@@ -179,7 +179,7 @@ class Client:
             t = self.sys_clock.time()
             pipe = await self.get_dest_pipe()
             throw_bump = behavior == THROW_BUMP
-            if behavior == THROW_BUMP:
+            if throw_bump:
                 behavior = DONT_BUMP
 
             pkt = Packet(OP_PUT, name, value, kp.vkc, None, t, behavior)
@@ -246,6 +246,7 @@ async def delete(name: Union[str, bytes], kp: Keypair) -> Optional[bytes]:
 if __name__ == "__main__":
 
     async def workspace():
+        """Exercise the put, get, and delete client calls end-to-end against a live server."""
         name = str(rand_plain(10))
         kp = Keypair.generate()
 

@@ -56,7 +56,7 @@ class Packet:
         if vkc is not None:
             if len(vkc) != 33:
                 raise ValueError(
-                    f"vkc must be 33 bytes (compressed public key), got {len(vkc)}"
+                    "vkc must be 33 bytes (compressed public key), got {}".format(len(vkc))
                 )
 
     def gen_reply_key(self) -> None:
@@ -99,18 +99,18 @@ class Packet:
         # ID for packet.
         buf += struct.pack("<I", self.pkid)
         if len(buf) != 5:
-            raise RuntimeError(f"pack: expected 5 bytes after pkid, got {len(buf)}")
+            raise RuntimeError("pack: expected 5 bytes after pkid, got {}".format(len(buf)))
 
         # Reply pk.
         if self.reply_pk is not None:
             if len(self.reply_pk) != 33:
-                raise ValueError(f"reply_pk must be 33 bytes, got {len(self.reply_pk)}")
+                raise ValueError("reply_pk must be 33 bytes, got {}".format(len(self.reply_pk)))
             buf += self.reply_pk
         else:
             buf += b"\0" * 33
         if len(buf) != 38:
             raise RuntimeError(
-                f"pack: expected 38 bytes after reply_pk, got {len(buf)}"
+                "pack: expected 38 bytes after reply_pk, got {}".format(len(buf))
             )
 
         # Behavior for changes.
@@ -119,13 +119,13 @@ class Packet:
         # Prevent replay.
         buf += struct.pack("<d", self.updated)
         if len(buf) != 47:
-            raise RuntimeError(f"pack: expected 47 bytes after updated, got {len(buf)}")
+            raise RuntimeError("pack: expected 47 bytes after updated, got {}".format(len(buf)))
 
         # Header (lens.)
         buf += struct.pack("<H", self.name_len)
         buf += struct.pack("<H", self.value_len)
         if len(buf) != 51:
-            raise RuntimeError(f"pack: expected 51-byte header, got {len(buf)}")
+            raise RuntimeError("pack: expected 51-byte header, got {}".format(len(buf)))
 
         # Body (var len - limit)
         buf += self.name[:NB_NAME_LEN]

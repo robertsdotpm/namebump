@@ -19,8 +19,9 @@ V6_SUBNET_LIMIT = 15000
 V6_IFACE_LIMIT = 20
 
 # Name expiry: 7 days without a refresh triggers deletion.
-V6_ADDR_EXPIRY = 604800
-MIN_NAME_DURATION = 604800
+WEEK_SECS = 604800
+V6_ADDR_EXPIRY = WEEK_SECS
+MIN_NAME_DURATION = WEEK_SECS
 # Minimum penalty so very low usage still imposes some backpressure.
 MIN_DURATION_PENALTY = 60
 

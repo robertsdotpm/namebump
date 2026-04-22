@@ -20,6 +20,7 @@ class Keypair:
 
     @staticmethod
     def generate() -> "Keypair":
+        """Generate a new random secp256k1 keypair."""
         priv = SigningKey.generate(curve=SECP256k1)
         pub = priv.get_verifying_key()
         return Keypair(priv, pub)

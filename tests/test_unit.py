@@ -20,7 +20,7 @@ from namebump.defs import (
 from namebump.server import get_v6_parts
 
 
-FIXED_TIME = 1_700_000_000.0
+FIXED_TIME = 1700000000.0
 
 
 # ---------------------------------------------------------------------------
