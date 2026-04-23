@@ -338,7 +338,7 @@ class TestShutdown(unittest.TestCase):
 
         # Simulate asyncio.all_tasks(loop) returning two tasks
         import asyncio
-        with unittest.mock.patch("asyncio.all_tasks", return_value=[task1, task2]):
+        with unittest.mock.patch("asyncio.all_tasks", return_value=[task1, task2], create=True):
             shutdown(loop)
 
         task1.cancel.assert_called_once()
@@ -351,7 +351,7 @@ class TestShutdown(unittest.TestCase):
         import asyncio
 
         loop = MagicMock()
-        with unittest.mock.patch("asyncio.all_tasks", return_value=[]):
+        with unittest.mock.patch("asyncio.all_tasks", return_value=[], create=True):
             shutdown(loop)  # must not raise
 
     def test_shutdown_falls_back_to_all_tasks_class_method(self):
@@ -362,7 +362,7 @@ class TestShutdown(unittest.TestCase):
         task = MagicMock()
         loop = MagicMock()
 
-        with patch("asyncio.all_tasks", side_effect=AttributeError):
+        with patch("asyncio.all_tasks", side_effect=AttributeError, create=True):
             with patch("asyncio.Task") as mock_task_cls:
                 mock_task_cls.all_tasks = MagicMock(return_value=[task])
                 shutdown(loop)

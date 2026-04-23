@@ -160,8 +160,6 @@ async def v6_insert(
         int(v6_glob_main),
         int(v6_glob_extra),
         int(v6_lan_id),
-    )
-    sql_params += (
         int(v6_iface_id),
         now,
     )

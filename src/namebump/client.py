@@ -74,9 +74,7 @@ class Client:
         if self.nic is None:
             self.nic = Interface("default")
 
-        # Resolve dest to an IP.  If dest is a domain that has both A and AAAA
-        # records, prefer the AF that the local NIC also supports.
-        # TODO: This selection logic should live in aionetiface.
+        # Resolve dest to an IP, preferring an AF the local NIC also supports.
         self.addr = await Address(*self.dest, self.nic)
         for af in self.nic.supported():
             try:

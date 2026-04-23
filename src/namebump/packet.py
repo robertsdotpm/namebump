@@ -80,7 +80,6 @@ class Packet:
         vk = VerifyingKey.from_string(self.vkc, curve=SECP256k1)
         msg = self.get_msg_to_sign()
         try:
-            # recover_verify_key(msg, self.sig, vk_b)
             vk.verify(self.sig, msg)
             return True
         except BadSignatureError:
