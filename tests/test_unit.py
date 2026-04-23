@@ -341,8 +341,8 @@ class TestShutdown(unittest.TestCase):
         with unittest.mock.patch("asyncio.all_tasks", return_value=[task1, task2], create=True):
             shutdown(loop)
 
-        task1.cancel.assert_called_once()
-        task2.cancel.assert_called_once()
+        task1.cancel.assert_called_once_with()
+        task2.cancel.assert_called_once_with()
 
     def test_shutdown_no_error_when_no_tasks(self):
         """shutdown() must not raise when there are no pending tasks."""
@@ -367,7 +367,7 @@ class TestShutdown(unittest.TestCase):
                 mock_task_cls.all_tasks = MagicMock(return_value=[task])
                 shutdown(loop)
 
-        task.cancel.assert_called_once()
+        task.cancel.assert_called_once_with()
 
 
 if __name__ == "__main__":
