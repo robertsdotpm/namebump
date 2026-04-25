@@ -29,57 +29,73 @@ Never remove or comment out `print()` calls. They are intentional debugging and 
 - All SQL user values must go through parameter placeholders (`%s`) — never interpolate user data into SQL strings.
 - Pick one error idiom per function: either return a sentinel value or raise — not both.
 
-## Running tests
+## Writing tests
 
-Always run with pytest-xdist for parallel execution and `--timeout=30` to prevent hung network tests from blocking the session forever. Use Python 3.5 from pyenv so breakage on the minimum supported version is caught immediately:
+**Never use pytest-specific code.** All tests use `unittest` with `AsyncTestCase` from `aionetiface.testing`.
 
-```sh
-~/.pyenv/versions/3.5.10/bin/python -m pytest tests/ -n auto --dist=loadfile --timeout=30 -q
+### The required pattern
+
+```python
+import unittest
+from aionetiface.testing import AsyncTestCase
+
+class TestMyFeature(AsyncTestCase):
+    async def asyncSetUp(self):
+        self.client = await start_something()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+
+    async def test_something(self):
+        result = await self.client.do_thing()
+        self.assertEqual(result, expected)
+
+    async def test_skip_example(self):
+        if condition:
+            self.skipTest("reason")
+        ...
 ```
 
-On Windows (pyenv-win), use the versioned python.exe directly:
+### Rules
+
+- Base class is always `AsyncTestCase` — never `unittest.TestCase`, `unittest.IsolatedAsyncioTestCase`, or any pytest class.
+- Test methods are `async def` coroutines.
+- Use `self.skipTest("reason")` — never `pytest.skip(...)`.
+- Never import `pytest`. Never use `@pytest.mark.*` decorators.
+- `aionetiface.testing` handles event loop setup, linecache no-op, and Windows firewall automatically on import.
+
+### Running tests
+
+Pull all four repos first:
 
 ```cmd
-C:\Users\<user>\.pyenv\pyenv-win\versions\<ver>\python.exe -m pytest tests/ -n auto --dist=loadfile --timeout=30 -q
+cd C:\Users\<user>\projects\p2pd && git fetch origin && git reset --hard origin/ai_experiment
+cd C:\Users\<user>\projects\aionetiface && git fetch origin && git reset --hard origin/ai_experiment
+cd C:\Users\<user>\projects\namebump && git fetch origin && git reset --hard origin/main
+cd C:\Users\<user>\projects\sidewire && git fetch origin && git reset --hard origin/main
 ```
 
-## Test dependencies
-
-These packages are required to run the test suite but are not package dependencies. Install them separately:
-
-```text
-pytest-xdist     # parallel workers (-n auto --dist=loadfile)
-pytest-timeout   # per-test timeout (--timeout=30) — without this, hung network tests block forever
-```
+Run with `unittest discover`:
 
 ```sh
-pip install pytest-xdist pytest-timeout
+python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-### Python 3.5 install quirks
-
-`setuptools>=68` uses Python 3.8+ syntax (walrus operator). On Python 3.5, bypass the build system:
+### Install quirks (Python 3.5)
 
 ```sh
 pip install wheel "setuptools<50"
 pip install --no-build-isolation --no-deps -e .
-```
-
-`aionetiface` is a dependency and must be installed from its **local checkout** — do **not** let pip pull it from PyPI:
-
-```sh
 pip install --no-build-isolation --no-deps -e ../aionetiface
 ```
 
-### Python 3.5.0 specifically (not 3.5.1+)
-
-`typing.Type` was added in Python 3.5.3. Packages importing it crash on 3.5.0. Pin these:
+On Python 3.5.0 specifically:
 
 ```sh
-pip install "pathlib2==2.2.1" "pytest==4.6.11" "pytest-xdist==1.34.0"
+pip install "pathlib2==2.2.1" "pytest==4.6.11"
 ```
 
-If pip was accidentally upgraded past 21.x on a 3.5.0 interpreter, restore it first:
+If pip was accidentally upgraded past 21.x on a 3.5.0 interpreter:
 
 ```sh
 python -m ensurepip

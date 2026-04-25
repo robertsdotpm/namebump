@@ -39,7 +39,7 @@ def _skip_if_offline():
         raise unittest.SkipTest("PNP server {}:{} unreachable".format(host, port))
 
 
-class TestLiveServer(unittest.IsolatedAsyncioTestCase):
+class TestLiveServer(AsyncTestCase):
     """PUT / GET / DELETE round-trip against the live namebump server."""
 
     async def asyncSetUp(self):

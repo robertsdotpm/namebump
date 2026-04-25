@@ -105,7 +105,7 @@ async def NB_get_test_client_serv(
     return clients, serv
 
 
-class TestPNPFromServer(unittest.IsolatedAsyncioTestCase):
+class TestPNPFromServer(AsyncTestCase):
     async def test_NB_non_ascii_io(self):
         clients, serv = await NB_get_test_client_serv()
         await NB_clear_tables()
