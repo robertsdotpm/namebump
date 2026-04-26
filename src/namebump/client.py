@@ -15,6 +15,8 @@ from aionetiface import (
     Pipe,
     TCP,
     VALID_LOCALHOST,
+    fstr,
+    log,
     log_exception,
     h_to_b,
     async_run,
@@ -95,6 +97,7 @@ class Client:
 
     async def get_dest_pipe(self) -> Any:
         """Open and return a fresh TCP pipe to the namebump server."""
+        log(fstr("namebump.get_dest_pipe: dest={0} af={1}", (self.dest, self.af)))
         route = self.nic.route(self.af)
 
         # Bind to the loopback address explicitly so the connection succeeds.
@@ -104,13 +107,15 @@ class Client:
             route = await route.bind(ips=self.dest[0])
         else:
             route = await route.bind()
+        log(fstr("namebump.get_dest_pipe: bound, opening TCP connect", ()))
 
         # Make TCP connection to namebump server.
         try:
             pipe = await Pipe(TCP, self.addr, route).connect()
             if pipe is None:
+                log(fstr("namebump.get_dest_pipe: Pipe.connect returned None", ()))
                 raise ConnectionError("Could not connect to namebump server.")
-
+            log(fstr("namebump.get_dest_pipe: connected, returning pipe", ()))
             return pipe
         except (OSError, ConnectionError, asyncio.TimeoutError):
             log_exception()
@@ -118,7 +123,9 @@ class Client:
 
     async def return_resp(self, pipe: Any) -> Packet:
         """Read, decrypt, and deserialise the server's response from the pipe."""
+        log(fstr("namebump.return_resp: awaiting proto_recv from {0}", (self.dest,)))
         buf = await proto_recv(pipe)
+        log(fstr("namebump.return_resp: got {0} bytes", (len(buf) if buf else 0,)))
         buf = decrypt(self.reply_sk, buf)
         pkt = Packet.unpack(buf)
         if not pkt.updated:
@@ -172,6 +179,7 @@ class Client:
         behavior: int = DO_BUMP,
     ) -> Packet:
         """Write a signed name-value pair to the server, applying the given bump behavior."""
+        log(fstr("namebump.Client.put: name={0} dest={1}", (name, self.dest)))
         pipe = None
         try:
             t = self.sys_clock.time()
@@ -181,9 +189,12 @@ class Client:
                 behavior = DONT_BUMP
 
             pkt = Packet(OP_PUT, name, value, kp.vkc, None, t, behavior)
+            log(fstr("namebump.Client.put: sending pkt to {0}", (self.dest,)))
             await self.send_pkt(pipe, pkt, kp)
+            log(fstr("namebump.Client.put: pkt sent, awaiting response", ()))
 
             ret = await self.return_resp(pipe)
+            log(fstr("namebump.Client.put: response received ret={0}", (ret,)))
             if throw_bump and not ret.value:
                 raise KeyError("putting this will bump.")
 
