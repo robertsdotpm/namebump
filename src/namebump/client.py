@@ -31,6 +31,16 @@ from .defs import OP_GET, OP_PUT, OP_DEL, DO_BUMP, DONT_BUMP, THROW_BUMP
 DEST = ("ovh1.p2pd.net", 5300)
 PK = h_to_b("03f20b5dcfa5d319635a34f18cb47b339c34f515515a5be733cd7a7f8494e97136")
 
+# Retry behaviour for every Client request. The protocol is single-shot
+# per attempt -- we open a fresh TCP pipe, send one packet, await one
+# response, close. A transient slow / dropped server therefore needs
+# retries here rather than at the caller; otherwise every caller of put /
+# get / delete would have to implement its own retry loop. Network-error
+# only: we do not retry application-level errors (e.g. KeyError from
+# THROW_BUMP semantics).
+DEFAULT_RETRIES = 3
+DEFAULT_RETRY_PAUSE = 0.5
+
 
 class Client:
     """Async client for a single namebump server.
@@ -150,26 +160,53 @@ class Client:
         if not send_success:
             raise IOError("client send pkt failure")
 
+    async def with_retry(self, attempt_coro_factory: Any) -> Any:
+        """Run attempt_coro_factory() up to DEFAULT_RETRIES times.
+
+        Retries on network-class errors (OSError, ConnectionError,
+        asyncio.TimeoutError) only. Application errors (e.g. KeyError
+        from THROW_BUMP) propagate immediately. CancelledError always
+        propagates immediately.
+        """
+        last_exc = None
+        for attempt in range(DEFAULT_RETRIES):
+            try:
+                return await attempt_coro_factory()
+            except asyncio.CancelledError:  # pylint: disable=try-except-raise
+                raise
+            except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
+                last_exc = exc
+                log_exception()
+                log(fstr(
+                    "namebump.Client retry: dest={0} attempt={1}/{2} err={3!r}",
+                    (self.dest, attempt + 1, DEFAULT_RETRIES, exc),
+                ))
+            if attempt + 1 < DEFAULT_RETRIES:
+                await asyncio.sleep(DEFAULT_RETRY_PAUSE)
+        # All attempts failed -- re-raise the last network error so the
+        # caller sees the same exception type they would have seen
+        # without retries.
+        if last_exc is not None:
+            raise last_exc
+        raise ConnectionError("Could not reach namebump server.")
+
     async def get(
         self, name: Union[str, bytes], kp: Optional[Keypair] = None
     ) -> Packet:
         """Fetch the value for name, optionally identifying the caller with a keypair."""
-        pipe = None
-        try:
-            t = self.sys_clock.time()
-            pipe = await self.get_dest_pipe()
-            vkc = kp.vkc if kp else self.reply_pk
-            pkt = Packet(OP_GET, name, vkc=vkc, updated=t)
-            await self.send_pkt(pipe, pkt, kp, sign=bool(kp))
-            return await self.return_resp(pipe)
-        except asyncio.CancelledError:  # pylint: disable=try-except-raise
-            raise
-        except (OSError, ConnectionError, asyncio.TimeoutError):
-            log_exception()
-            raise
-        finally:
-            if pipe is not None:
-                await pipe.close()
+        async def one_attempt() -> Packet:
+            pipe = None
+            try:
+                t = self.sys_clock.time()
+                pipe = await self.get_dest_pipe()
+                vkc = kp.vkc if kp else self.reply_pk
+                pkt = Packet(OP_GET, name, vkc=vkc, updated=t)
+                await self.send_pkt(pipe, pkt, kp, sign=bool(kp))
+                return await self.return_resp(pipe)
+            finally:
+                if pipe is not None:
+                    await pipe.close()
+        return await self.with_retry(one_attempt)
 
     async def put(
         self,
@@ -180,47 +217,47 @@ class Client:
     ) -> Packet:
         """Write a signed name-value pair to the server, applying the given bump behavior."""
         log(fstr("namebump.Client.put: name={0} dest={1}", (name, self.dest)))
-        pipe = None
-        try:
-            t = self.sys_clock.time()
-            pipe = await self.get_dest_pipe()
-            throw_bump = behavior == THROW_BUMP
-            if throw_bump:
-                behavior = DONT_BUMP
 
-            pkt = Packet(OP_PUT, name, value, kp.vkc, None, t, behavior)
-            log(fstr("namebump.Client.put: sending pkt to {0}", (self.dest,)))
-            await self.send_pkt(pipe, pkt, kp)
-            log(fstr("namebump.Client.put: pkt sent, awaiting response", ()))
+        async def one_attempt() -> Packet:
+            pipe = None
+            try:
+                t = self.sys_clock.time()
+                pipe = await self.get_dest_pipe()
+                throw_bump = behavior == THROW_BUMP
+                effective_behavior = DONT_BUMP if throw_bump else behavior
 
-            ret = await self.return_resp(pipe)
-            log(fstr("namebump.Client.put: response received ret={0}", (ret,)))
-            if throw_bump and not ret.value:
-                raise KeyError("putting this will bump.")
+                pkt = Packet(OP_PUT, name, value, kp.vkc, None, t, effective_behavior)
+                log(fstr("namebump.Client.put: sending pkt to {0}", (self.dest,)))
+                await self.send_pkt(pipe, pkt, kp)
+                log(fstr("namebump.Client.put: pkt sent, awaiting response", ()))
 
-            return ret
-        except (OSError, ConnectionError, asyncio.TimeoutError):
-            log_exception()
-            raise
-        finally:
-            if pipe is not None:
-                await pipe.close()
+                ret = await self.return_resp(pipe)
+                log(fstr("namebump.Client.put: response received ret={0}", (ret,)))
+                if throw_bump and not ret.value:
+                    # Application-level signal -- not a network failure,
+                    # so it propagates through with_retry without retrying.
+                    raise KeyError("putting this will bump.")
+                return ret
+            finally:
+                if pipe is not None:
+                    await pipe.close()
+
+        return await self.with_retry(one_attempt)
 
     async def delete(self, name: Union[str, bytes], kp: Keypair) -> Packet:
         """Send a signed delete request for name and return the server's response."""
-        pipe = None
-        try:
-            t = self.sys_clock.time()
-            pipe = await self.get_dest_pipe()
-            pkt = Packet(OP_DEL, name, vkc=kp.vkc, updated=t)
-            await self.send_pkt(pipe, pkt, kp)
-            return await self.return_resp(pipe)
-        except (OSError, ConnectionError, asyncio.TimeoutError):
-            log_exception()
-            raise
-        finally:
-            if pipe is not None:
-                await pipe.close()
+        async def one_attempt() -> Packet:
+            pipe = None
+            try:
+                t = self.sys_clock.time()
+                pipe = await self.get_dest_pipe()
+                pkt = Packet(OP_DEL, name, vkc=kp.vkc, updated=t)
+                await self.send_pkt(pipe, pkt, kp)
+                return await self.return_resp(pipe)
+            finally:
+                if pipe is not None:
+                    await pipe.close()
+        return await self.with_retry(one_attempt)
 
 
 if __name__ == "__main__":
