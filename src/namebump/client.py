@@ -207,23 +207,26 @@ class Client:
             done, pending = await asyncio.wait(
                 tasks, return_when=asyncio.FIRST_COMPLETED,
             )
-            # Walk completed first (preserves "first to finish" winner),
-            # then awaited-pending (the slower transport).  Each task's
-            # finally clause closes its own pipe.
-            for t in pending:
-                t.cancel()
+            # Walk the first-finisher set first. If a winner succeeded,
+            # cancel the laggard and return immediately. If the winner
+            # ERRORED, leave the laggard alone -- it may still succeed.
+            # The earlier shape cancelled the laggard pre-check, then
+            # awaited it post-check, which converted its real result
+            # into CancelledError.
             for t in done:
                 try:
-                    return t.result()
+                    result = t.result()
+                    for p in pending:
+                        p.cancel()
+                    return result
                 except asyncio.CancelledError:  # pylint: disable=try-except-raise
                     raise
                 except (OSError, ConnectionError, asyncio.TimeoutError):
-                    # First completer errored; fall through to the
-                    # other transport which may still succeed.
                     log_exception()
 
-            # The first finisher errored. Wait for the laggard before
-            # giving up -- it might still succeed within the budget.
+            # First finisher errored; let the laggard run to completion
+            # without cancelling it. with_retry one frame up will catch
+            # any final ConnectionError and decide whether to retry.
             for t in pending:
                 try:
                     return await t
