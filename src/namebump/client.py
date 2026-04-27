@@ -23,6 +23,7 @@ from aionetiface import (
     rand_plain,
     proto_recv,
 )
+from aionetiface.net.net_defs import NET_CONF
 from aionetiface.vendor.ecies import encrypt, decrypt
 from .packet import Packet
 from .keypair import Keypair
@@ -40,6 +41,22 @@ PK = h_to_b("03f20b5dcfa5d319635a34f18cb47b339c34f515515a5be733cd7a7f8494e97136"
 # THROW_BUMP semantics).
 DEFAULT_RETRIES = 3
 DEFAULT_RETRY_PAUSE = 0.5
+
+# Per-attempt TCP connect budget for namebump server pipes.
+# NET_CONF defaults to 2s, which covers a healthy box's DNS resolve
+# + TCP SYN/SYN-ACK with room to spare. On slower stacks (Windows XP
+# was the canonical example: resolver routinely blocks 1-3s on first
+# query under any DNS contention) 2s is too tight -- DNS alone can
+# eat the whole window, leaving zero room for the actual TCP connect.
+# All three retries blow through with the same 2s cap and the call
+# bubbles "All name servers failed" when the network is fine and only
+# the per-attempt cap was wrong.
+#
+# 6s gives meaningful headroom on slow stacks without slowing healthy
+# ones (a good box still completes in <500ms regardless of the cap).
+# Worst case: 3 retries x (6 + 0.5 sleep) = 19.5s, still well under
+# the typical 30s caller-level budget.
+NAMEBUMP_PIPE_CONF = dict(NET_CONF, con_timeout=6)
 
 
 class Client:
@@ -121,7 +138,9 @@ class Client:
 
         # Make TCP connection to namebump server.
         try:
-            pipe = await Pipe(TCP, self.addr, route).connect()
+            pipe = await Pipe(
+                TCP, self.addr, route, conf=NAMEBUMP_PIPE_CONF,
+            ).connect()
             if pipe is None:
                 log(fstr("namebump.get_dest_pipe: Pipe.connect returned None", ()))
                 raise ConnectionError("Could not connect to namebump server.")
