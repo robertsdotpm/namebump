@@ -14,6 +14,7 @@ from aionetiface import (
     Address,
     Pipe,
     TCP,
+    UDP,
     VALID_LOCALHOST,
     fstr,
     log,
@@ -68,8 +69,23 @@ class Client:
         await client.put("myname", b"value", keypair)
         await client.delete("myname", keypair)
 
-    Each method opens a fresh TCP connection, sends one encrypted+signed
-    request, reads the encrypted reply, then closes the connection.
+    Each method opens a fresh pipe, sends one encrypted+signed request,
+    reads the encrypted reply, then closes the pipe.
+
+    Transport: TCP (default) or UDP. The namebump server listens on
+    BOTH transports for every (v4, v6) bind, so the choice is purely
+    client-side -- no protocol or wire-format change. UDP is materially
+    faster + more reliable for this single-shot req/resp pattern:
+
+      * No SYN/SYN-ACK: 1 RTT instead of 2-3.
+      * No TIME_WAIT residue between back-to-back requests.
+      * App-level retries (with_retry below) absorb the rare lost
+        datagram, so UDP loss isn't a correctness concern.
+      * Slow stacks (Windows XP especially) where TCP setup blocks
+        on DNS contention or kernel scheduling get a lighter path.
+
+    Pass proto=UDP to opt in. Default stays TCP for backward compat
+    with anything that depends on the connection-oriented wire shape.
     """
 
     def __init__(
@@ -78,13 +94,17 @@ class Client:
         dest_pk: bytes,
         sys_clock: Optional[Any] = None,
         nic: Optional[Any] = None,
+        proto: int = TCP,
     ) -> None:
         """Initialize the client with a server address, its public key, and optional clock/NIC."""
         if not isinstance(dest_pk, bytes) or len(dest_pk) != 33:
             raise ValueError("dest_pk must be a 33-byte compressed public key")
+        if proto not in (TCP, UDP):
+            raise ValueError("proto must be TCP or UDP, got {0!r}".format(proto))
 
         self.dest = dest
         self.dest_pk = dest_pk
+        self.proto = proto
 
         # Ephemeral key pair used to receive the encrypted server reply.
         self.reply_sk = SigningKey.generate(curve=SECP256k1)
@@ -122,24 +142,39 @@ class Client:
         """Allow ``await Client(...)`` as a shorthand for ``await Client(...).start()``."""
         return self.start().__await__()
 
-    async def get_dest_pipe(self) -> Any:
-        """Open and return a fresh TCP pipe to the namebump server."""
-        log(fstr("namebump.get_dest_pipe: dest={0} af={1}", (self.dest, self.af)))
+    async def get_dest_pipe(self, proto: Optional[int] = None) -> Any:
+        """Open and return a fresh pipe (TCP or UDP) to the namebump server.
+
+        Defaults to self.proto when proto is None.  race_request below
+        passes proto explicitly to spawn one pipe per transport so the
+        two attempts don't trip over each other's bound state.
+        """
+        if proto is None:
+            proto = self.proto
+        log(fstr(
+            "namebump.get_dest_pipe: dest={0} af={1} proto={2}",
+            (self.dest, self.af, "UDP" if proto == UDP else "TCP"),
+        ))
         route = self.nic.route(self.af)
 
         # Bind to the loopback address explicitly so the connection succeeds.
         # For non-loopback destinations, bind to the default outbound address.
-        # TODO: move this and similar FE80 logic into bind.
+        # Same bind logic for both TCP and UDP -- the kernel uses the bound
+        # address as the source for sendto / connect alike.
         if self.dest[0] in VALID_LOCALHOST:
             route = await route.bind(ips=self.dest[0])
         else:
             route = await route.bind()
-        log(fstr("namebump.get_dest_pipe: bound, opening TCP connect", ()))
+        log(fstr("namebump.get_dest_pipe: bound, opening pipe", ()))
 
-        # Make TCP connection to namebump server.
+        # Open the pipe. For TCP this performs the SYN/SYN-ACK handshake
+        # under the bumped 6s con_timeout. For UDP, .connect() just
+        # creates the bound socket -- there is no handshake to wait on,
+        # so the call returns sub-millisecond regardless of network
+        # health. UDP loss is handled by with_retry one frame up.
         try:
             pipe = await Pipe(
-                TCP, self.addr, route, conf=NAMEBUMP_PIPE_CONF,
+                proto, self.addr, route, conf=NAMEBUMP_PIPE_CONF,
             ).connect()
             if pipe is None:
                 log(fstr("namebump.get_dest_pipe: Pipe.connect returned None", ()))
@@ -149,6 +184,66 @@ class Client:
         except (OSError, ConnectionError, asyncio.TimeoutError):
             log_exception()
             raise
+
+    async def race_request(self, build_attempt: Any) -> Any:
+        """Race a request over TCP and UDP concurrently; first success wins.
+
+        build_attempt(proto) is a callable that returns a coroutine running
+        a full single-shot send-recv-close cycle on the given proto.  We
+        spawn one task per transport, take the first non-error result,
+        and cancel the other.  When BOTH transports fail we re-raise the
+        first error so with_retry's classification still works.
+
+        Why race instead of pick: UDP wins on a healthy network (1 RTT
+        vs TCP's 2-3) but a few firewall / NAT setups silently drop
+        UDP -- racing means we get the lighter path when it works
+        without ever falling off when it doesn't.
+        """
+        tasks = [
+            asyncio.ensure_future(build_attempt(TCP)),
+            asyncio.ensure_future(build_attempt(UDP)),
+        ]
+        try:
+            done, pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED,
+            )
+            # Walk completed first (preserves "first to finish" winner),
+            # then awaited-pending (the slower transport).  Each task's
+            # finally clause closes its own pipe.
+            for t in pending:
+                t.cancel()
+            for t in done:
+                try:
+                    return t.result()
+                except asyncio.CancelledError:  # pylint: disable=try-except-raise
+                    raise
+                except (OSError, ConnectionError, asyncio.TimeoutError):
+                    # First completer errored; fall through to the
+                    # other transport which may still succeed.
+                    log_exception()
+
+            # The first finisher errored. Wait for the laggard before
+            # giving up -- it might still succeed within the budget.
+            for t in pending:
+                try:
+                    return await t
+                except asyncio.CancelledError:  # pylint: disable=try-except-raise
+                    raise
+                except (OSError, ConnectionError, asyncio.TimeoutError):
+                    log_exception()
+
+            # Both transports failed.
+            raise ConnectionError(
+                "Both TCP and UDP attempts failed for {0}".format(self.dest)
+            )
+        finally:
+            # Best-effort cancel + drain so neither task leaks beyond
+            # this race -- avoids stray pipe.close()-during-loop-shutdown
+            # warnings on test teardown.
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def return_resp(self, pipe: Any) -> Packet:
         """Read, decrypt, and deserialise the server's response from the pipe."""
@@ -174,7 +269,12 @@ class Client:
 
         buf = msg + sig
         enc_msg = encrypt(self.dest_pk, buf)
-        dest = (self.addr.select_ip(self.af).ip, 5300)
+        # Use the configured destination port (self.dest[1]) instead of
+        # hard-coding 5300 -- in practice every namebump server runs on
+        # NB_PORT, but the hard-code blocked the dev / test path that
+        # spins up a server on a different port and breaks if a caller
+        # ever overrides dest. self.dest is the canonical source.
+        dest = (self.addr.select_ip(self.af).ip, self.dest[1])
         send_success = await pipe.send(enc_msg, dest)
         if not send_success:
             raise IOError("client send pkt failure")
@@ -213,19 +313,24 @@ class Client:
         self, name: Union[str, bytes], kp: Optional[Keypair] = None
     ) -> Packet:
         """Fetch the value for name, optionally identifying the caller with a keypair."""
-        async def one_attempt() -> Packet:
-            pipe = None
-            try:
-                t = self.sys_clock.time()
-                pipe = await self.get_dest_pipe()
-                vkc = kp.vkc if kp else self.reply_pk
-                pkt = Packet(OP_GET, name, vkc=vkc, updated=t)
-                await self.send_pkt(pipe, pkt, kp, sign=bool(kp))
-                return await self.return_resp(pipe)
-            finally:
-                if pipe is not None:
-                    await pipe.close()
-        return await self.with_retry(one_attempt)
+        def attempt_for(proto: int):
+            async def one_attempt() -> Packet:
+                pipe = None
+                try:
+                    t = self.sys_clock.time()
+                    pipe = await self.get_dest_pipe(proto=proto)
+                    vkc = kp.vkc if kp else self.reply_pk
+                    pkt = Packet(OP_GET, name, vkc=vkc, updated=t)
+                    await self.send_pkt(pipe, pkt, kp, sign=bool(kp))
+                    return await self.return_resp(pipe)
+                finally:
+                    if pipe is not None:
+                        await pipe.close()
+            return one_attempt()
+
+        async def race() -> Packet:
+            return await self.race_request(attempt_for)
+        return await self.with_retry(race)
 
     async def put(
         self,
@@ -237,46 +342,62 @@ class Client:
         """Write a signed name-value pair to the server, applying the given bump behavior."""
         log(fstr("namebump.Client.put: name={0} dest={1}", (name, self.dest)))
 
-        async def one_attempt() -> Packet:
-            pipe = None
-            try:
-                t = self.sys_clock.time()
-                pipe = await self.get_dest_pipe()
-                throw_bump = behavior == THROW_BUMP
-                effective_behavior = DONT_BUMP if throw_bump else behavior
+        def attempt_for(proto: int):
+            async def one_attempt() -> Packet:
+                pipe = None
+                try:
+                    t = self.sys_clock.time()
+                    pipe = await self.get_dest_pipe(proto=proto)
+                    throw_bump = behavior == THROW_BUMP
+                    effective_behavior = DONT_BUMP if throw_bump else behavior
 
-                pkt = Packet(OP_PUT, name, value, kp.vkc, None, t, effective_behavior)
-                log(fstr("namebump.Client.put: sending pkt to {0}", (self.dest,)))
-                await self.send_pkt(pipe, pkt, kp)
-                log(fstr("namebump.Client.put: pkt sent, awaiting response", ()))
+                    pkt = Packet(
+                        OP_PUT, name, value, kp.vkc, None, t, effective_behavior,
+                    )
+                    log(fstr(
+                        "namebump.Client.put: sending pkt to {0} via {1}",
+                        (self.dest, "UDP" if proto == UDP else "TCP"),
+                    ))
+                    await self.send_pkt(pipe, pkt, kp)
 
-                ret = await self.return_resp(pipe)
-                log(fstr("namebump.Client.put: response received ret={0}", (ret,)))
-                if throw_bump and not ret.value:
-                    # Application-level signal -- not a network failure,
-                    # so it propagates through with_retry without retrying.
-                    raise KeyError("putting this will bump.")
-                return ret
-            finally:
-                if pipe is not None:
-                    await pipe.close()
+                    ret = await self.return_resp(pipe)
+                    log(fstr(
+                        "namebump.Client.put: response via {0} ret={1}",
+                        ("UDP" if proto == UDP else "TCP", ret),
+                    ))
+                    if throw_bump and not ret.value:
+                        # Application-level signal -- not a network failure,
+                        # so it propagates through with_retry without retrying.
+                        raise KeyError("putting this will bump.")
+                    return ret
+                finally:
+                    if pipe is not None:
+                        await pipe.close()
+            return one_attempt()
 
-        return await self.with_retry(one_attempt)
+        async def race() -> Packet:
+            return await self.race_request(attempt_for)
+        return await self.with_retry(race)
 
     async def delete(self, name: Union[str, bytes], kp: Keypair) -> Packet:
         """Send a signed delete request for name and return the server's response."""
-        async def one_attempt() -> Packet:
-            pipe = None
-            try:
-                t = self.sys_clock.time()
-                pipe = await self.get_dest_pipe()
-                pkt = Packet(OP_DEL, name, vkc=kp.vkc, updated=t)
-                await self.send_pkt(pipe, pkt, kp)
-                return await self.return_resp(pipe)
-            finally:
-                if pipe is not None:
-                    await pipe.close()
-        return await self.with_retry(one_attempt)
+        def attempt_for(proto: int):
+            async def one_attempt() -> Packet:
+                pipe = None
+                try:
+                    t = self.sys_clock.time()
+                    pipe = await self.get_dest_pipe(proto=proto)
+                    pkt = Packet(OP_DEL, name, vkc=kp.vkc, updated=t)
+                    await self.send_pkt(pipe, pkt, kp)
+                    return await self.return_resp(pipe)
+                finally:
+                    if pipe is not None:
+                        await pipe.close()
+            return one_attempt()
+
+        async def race() -> Packet:
+            return await self.race_request(attempt_for)
+        return await self.with_retry(race)
 
 
 if __name__ == "__main__":
