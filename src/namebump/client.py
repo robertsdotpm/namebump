@@ -249,12 +249,27 @@ class Client:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def return_resp(self, pipe: Any) -> Packet:
-        """Read, decrypt, and deserialise the server's response from the pipe."""
+        """Read, decrypt, and deserialise the server's response from the pipe.
+
+        Raises ConnectionError on decrypt / unpack failure so the
+        with_retry + race_request layers above treat "got garbage on
+        the pipe" as a transient network error (retry-eligible)
+        rather than a hard programming error. Concretely: UDP pipes
+        are unconnected and can receive stray datagrams from any
+        peer; if proto_recv hands back a non-namebump frame, the tag
+        check inside ecies sym_decrypt raises AssertionError. That's
+        an "I/O quality" issue, not a logic bug.
+        """
         log(fstr("namebump.return_resp: awaiting proto_recv from {0}", (self.dest,)))
         buf = await proto_recv(pipe)
         log(fstr("namebump.return_resp: got {0} bytes", (len(buf) if buf else 0,)))
-        buf = decrypt(self.reply_sk, buf)
-        pkt = Packet.unpack(buf)
+        try:
+            buf = decrypt(self.reply_sk, buf)
+            pkt = Packet.unpack(buf)
+        except (AssertionError, ValueError, KeyError) as exc:
+            raise ConnectionError(
+                "namebump return_resp: malformed/foreign response: {0!r}".format(exc)
+            ) from exc
         if not pkt.updated:
             pkt.value = None
         return pkt
