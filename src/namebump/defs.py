@@ -7,7 +7,14 @@ NB_PORT = 5300
 
 # Maximum byte lengths for wire-protocol name and value fields.
 NB_NAME_LEN = 50
-NB_VAL_LEN = 500
+# 1024 (was 500): node addr_bytes optionally embeds MQTT broker
+# and TURN server hint sections (the 6-part wire format), pushing
+# typical addrs from ~280B to ~430-580B. The previous 500 cap
+# silently truncated on PUT and parse_node_addr returned None on
+# GET, breaking every nickname-resolved addr end-to-end. 1024
+# gives room for the hint sections plus future protocol fields
+# without forcing another wire-compat bump.
+NB_VAL_LEN = 1024
 
 # Maximum names a single IPv4 / IPv6 interface address may register.
 V4_NAME_LIMIT = 20
