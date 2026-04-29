@@ -18,6 +18,7 @@ from namebump.client import Client, PK
 from namebump.client import DEST
 from namebump import Keypair
 from aionetiface import Interface
+from aionetiface.testing import AsyncTestCase
 from server_retry_helpers import with_server_retry
 
 # Fixed test keypair — reuses the same name slot on each run so it doesn't

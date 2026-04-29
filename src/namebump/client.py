@@ -113,6 +113,7 @@ class Client:
         self.sys_clock = sys_clock
         self.nic = nic
         self.af = None
+        self.afs = []
         self.addr = None
 
     async def start(self) -> "Client":
@@ -123,39 +124,49 @@ class Client:
         if self.nic is None:
             self.nic = Interface("default")
 
-        # Resolve dest to an IP, preferring an AF the local NIC also supports.
+        # Resolve dest, keep every AF the NIC + address both support.
+        # Primary self.af is used by PUT / DEL (which stay AF-aware to
+        # respect per-AF name quotas and IP-keyed reachability). GET
+        # races every entry in self.afs -- v4 and v6 traverse
+        # independent BGP planes, so a Cogent-vs-HE-style routing hole
+        # on one AF is invisible to the other.
         self.addr = await Address(*self.dest, self.nic)
         for af in self.nic.supported():
             try:
                 self.addr.select_ip(af)
-                self.af = af
-                break
+                self.afs.append(af)
             except KeyError:
                 continue
 
-        if not self.af:
+        if not self.afs:
             raise ConnectionError("Dest AF is not supported by NIC.")
 
+        self.af = self.afs[0]
         return self
 
     def __await__(self) -> Any:
         """Allow ``await Client(...)`` as a shorthand for ``await Client(...).start()``."""
         return self.start().__await__()
 
-    async def get_dest_pipe(self, proto: Optional[int] = None) -> Any:
+    async def get_dest_pipe(
+        self, proto: Optional[int] = None, af: Optional[int] = None,
+    ) -> Any:
         """Open and return a fresh pipe (TCP or UDP) to the namebump server.
 
-        Defaults to self.proto when proto is None.  race_request below
-        passes proto explicitly to spawn one pipe per transport so the
-        two attempts don't trip over each other's bound state.
+        Defaults to self.proto / self.af when args are None.  race_request
+        below passes proto explicitly so the two attempts don't trip over
+        each other's bound state.  race_get_paths additionally passes af
+        so a single GET can probe both v4 and v6 transports concurrently.
         """
         if proto is None:
             proto = self.proto
+        if af is None:
+            af = self.af
         log(fstr(
             "namebump.get_dest_pipe: dest={0} af={1} proto={2}",
-            (self.dest, self.af, "UDP" if proto == UDP else "TCP"),
+            (self.dest, af, "UDP" if proto == UDP else "TCP"),
         ))
-        route = self.nic.route(self.af)
+        route = self.nic.route(af)
 
         # Bind to the loopback address explicitly so the connection succeeds.
         # For non-loopback destinations, bind to the default outbound address.
@@ -248,6 +259,54 @@ class Client:
                     t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def race_get_paths(self, build_attempt: Any) -> Any:
+        """Race build_attempt(af, proto) across every (af, proto) combination.
+
+        Used by GET only.  Reads are quota-free at the server, and v4 and
+        v6 traverse independent BGP planes / peering relationships, so
+        racing both AFs catches Cogent-vs-HE-style routing holes that a
+        single-AF lookup silently misses.  PUT and DEL stay on
+        race_request (one AF, both transports) to respect per-AF name
+        quotas and avoid double-spending the tighter v6 budget.
+
+        On a single-stack NIC self.afs has one entry, so this collapses
+        to a TCP/UDP-only race -- equivalent to race_request.
+        """
+        combos = [(af, proto) for af in self.afs for proto in (TCP, UDP)]
+        tasks = [
+            asyncio.ensure_future(build_attempt(af, proto))
+            for af, proto in combos
+        ]
+        pending = list(tasks)
+        try:
+            last_exc = None
+            while pending:
+                done_set, still_pending = await asyncio.wait(
+                    pending, return_when=asyncio.FIRST_COMPLETED,
+                )
+                pending = list(still_pending)
+                for t in done_set:
+                    try:
+                        result = t.result()
+                        for p in pending:
+                            p.cancel()
+                        return result
+                    except asyncio.CancelledError:  # pylint: disable=try-except-raise
+                        raise
+                    except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
+                        last_exc = exc
+                        log_exception()
+            if last_exc is not None:
+                raise last_exc
+            raise ConnectionError(
+                "All AF/proto attempts failed for {0}".format(self.dest)
+            )
+        finally:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def return_resp(self, pipe: Any) -> Packet:
         """Read, decrypt, and deserialise the server's response from the pipe.
 
@@ -275,9 +334,12 @@ class Client:
         return pkt
 
     async def send_pkt(
-        self, pipe: Any, pkt: Packet, kp: Optional[Keypair], sign: bool = True
+        self, pipe: Any, pkt: Packet, kp: Optional[Keypair], sign: bool = True,
+        af: Optional[int] = None,
     ) -> None:
         """Serialise, optionally sign, encrypt, and send a packet to the server."""
+        if af is None:
+            af = self.af
         pkt.reply_pk = self.reply_pk
         msg = pkt.get_msg_to_sign()
         if sign:
@@ -292,7 +354,7 @@ class Client:
         # NB_PORT, but the hard-code blocked the dev / test path that
         # spins up a server on a different port and breaks if a caller
         # ever overrides dest. self.dest is the canonical source.
-        dest = (self.addr.select_ip(self.af).ip, self.dest[1])
+        dest = (self.addr.select_ip(af).ip, self.dest[1])
         send_success = await pipe.send(enc_msg, dest)
         if not send_success:
             raise IOError("client send pkt failure")
@@ -331,15 +393,15 @@ class Client:
         self, name: Union[str, bytes], kp: Optional[Keypair] = None
     ) -> Packet:
         """Fetch the value for name, optionally identifying the caller with a keypair."""
-        def attempt_for(proto: int):
+        def attempt_for(af: int, proto: int):
             async def one_attempt() -> Packet:
                 pipe = None
                 try:
                     t = self.sys_clock.time()
-                    pipe = await self.get_dest_pipe(proto=proto)
+                    pipe = await self.get_dest_pipe(proto=proto, af=af)
                     vkc = kp.vkc if kp else self.reply_pk
                     pkt = Packet(OP_GET, name, vkc=vkc, updated=t)
-                    await self.send_pkt(pipe, pkt, kp, sign=bool(kp))
+                    await self.send_pkt(pipe, pkt, kp, sign=bool(kp), af=af)
                     return await self.return_resp(pipe)
                 finally:
                     if pipe is not None:
@@ -347,7 +409,7 @@ class Client:
             return one_attempt()
 
         async def race() -> Packet:
-            return await self.race_request(attempt_for)
+            return await self.race_get_paths(attempt_for)
         return await self.with_retry(race)
 
     async def put(
