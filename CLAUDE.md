@@ -111,3 +111,9 @@ If pip was accidentally upgraded past 21.x on a 3.5.0 interpreter:
 python -m ensurepip
 python -m pip install "pip==20.3.4" "setuptools<50"
 ```
+
+## PNP propagation race after Client.put
+
+When `Client.put` returns success on a PNP server, the other PNP servers in the configured pool may not yet have the record. A peer that immediately calls `Client.get` against a server that hasn't seen the put yet will get a miss (or silently hang in the resolve step depending on timeout configuration).
+
+**This affects every cross-node flow that uses PNP for peer discovery.** Callers whose flow is listener-then-connector MUST allow a settling window of ~8 seconds between the listener's `put` returning and the connector's `get` firing. The reference implementation is `p2pd/demo/__main__.py:setup_node`. The full warning lives in `p2pd/node/node_start.py`.
