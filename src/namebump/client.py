@@ -386,8 +386,8 @@ class Client:
                 last_exc = exc
                 log_exception()
                 log(fstr(
-                    "namebump.Client retry: dest={0} attempt={1}/{2} err={3!r}",
-                    (self.dest, attempt + 1, DEFAULT_RETRIES, exc),
+                    "namebump.Client retry: dest={0} attempt={1}/{2} err={3}",
+                    (self.dest, attempt + 1, DEFAULT_RETRIES, repr(exc)),
                 ))
             if attempt + 1 < DEFAULT_RETRIES:
                 await asyncio.sleep(DEFAULT_RETRY_PAUSE)
