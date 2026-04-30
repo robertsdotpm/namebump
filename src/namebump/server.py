@@ -590,8 +590,19 @@ class Server(Daemon):
                 pkt.updated,
             )
         except ResourceLimit:
-            # Indicate put failed.
+            # Indicate put failed.  Both fields are reset because the
+            # client's return_resp re-converts pkt.value to None when
+            # pkt.updated is 0 -- with only value cleared (and updated
+            # left at the request's req_time) the client saw value=b""
+            # which `is not None`, marked the put as success, and the
+            # subsequent GET correctly returned no record (since the
+            # row was never written). The end result was matrix tests
+            # silently treating rate-limited puts as successful then
+            # failing later at lookup. Setting updated=0 means the
+            # client's existing `if not pkt.updated: pkt.value = None`
+            # path fires and the failure becomes visible to callers.
             pkt.value = b""
+            pkt.updated = 0
 
         await proto_send(pipe, self.serv_resp(pkt))
 
