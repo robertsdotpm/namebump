@@ -57,7 +57,7 @@ DEFAULT_RETRY_PAUSE = 0.5
 # ones (a good box still completes in <500ms regardless of the cap).
 # Worst case: 3 retries x (6 + 0.5 sleep) = 19.5s, still well under
 # the typical 30s caller-level budget.
-NAMEBUMP_PIPE_CONF = dict(NET_CONF, con_timeout=6)
+NAMEBUMP_PIPE_CONF = dict(NET_CONF, con_timeout=6, recv_timeout=6)
 
 
 class Client:
@@ -322,6 +322,15 @@ class Client:
         log(fstr("namebump.return_resp: awaiting proto_recv from {0}", (self.dest,)))
         buf = await proto_recv(pipe)
         log(fstr("namebump.return_resp: got {0} bytes", (len(buf) if buf else 0,)))
+        # proto_recv returns None on timeout / closed pipe. Without this guard
+        # the None falls into decrypt() and crashes on msg[0:33] with a
+        # TypeError that the with_retry/race layers don't classify as
+        # transient -- so a slow link looks like a hard programming error
+        # and never retries.
+        if buf is None:
+            raise ConnectionError(
+                "namebump return_resp: recv returned None (timeout or closed pipe)"
+            )
         try:
             buf = decrypt(self.reply_sk, buf)
             pkt = Packet.unpack(buf)
