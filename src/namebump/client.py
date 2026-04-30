@@ -43,6 +43,19 @@ PK = h_to_b("03f20b5dcfa5d319635a34f18cb47b339c34f515515a5be733cd7a7f8494e97136"
 DEFAULT_RETRIES = 3
 DEFAULT_RETRY_PAUSE = 0.5
 
+
+class PutRejected(Exception):
+    """Server accepted the connection but refused to store the put.
+
+    Raised by Client.put when the server returned a response packet
+    with no stored value -- typically the per-IP name-allocation cap
+    (ResourceLimit on the server side) but covers any future protocol-
+    level rejection that surfaces as updated=0 on the wire. Not a
+    network failure, so with_retry never sees it (it propagates past
+    the retry/race layer untouched, which is the correct behaviour --
+    rate limits are not transient).
+    """
+
 # Per-attempt TCP connect budget for namebump server pipes.
 # NET_CONF defaults to 2s, which covers a healthy box's DNS resolve
 # + TCP SYN/SYN-ACK with room to spare. On slower stacks (Windows XP
@@ -466,7 +479,19 @@ class Client:
 
         async def race() -> Packet:
             return await self.race_request(attempt_for)
-        return await self.with_retry(race)
+        ret = await self.with_retry(race)
+        # Server clears the stored value (and updated=0) on ResourceLimit
+        # so the client's return_resp converts pkt.value to None. Without
+        # this guard, callers see a "successful" packet with value=None
+        # and silently treat the put as stored -- matrix tests had been
+        # interpreting cap-rejected puts as success, then failing later
+        # at lookup. Surface the failure here as an explicit exception.
+        if ret is None or ret.value is None:
+            raise PutRejected(
+                "namebump put rejected by server (likely ResourceLimit; "
+                "name='{0}' dest={1})".format(name, self.dest)
+            )
+        return ret
 
     async def delete(self, name: Union[str, bytes], kp: Keypair) -> Packet:
         """Send a signed delete request for name and return the server's response."""
