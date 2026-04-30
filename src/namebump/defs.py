@@ -17,13 +17,13 @@ NB_NAME_LEN = 50
 NB_VAL_LEN = 1024
 
 # Maximum names a single IPv4 / IPv6 interface address may register.
-V4_NAME_LIMIT = 20
-V6_NAME_LIMIT = 5
+V4_NAME_LIMIT = 20000
+V6_NAME_LIMIT = 5000
 
 # IPv6 global-prefix subnet quotas.
 V6_GLOB_LIMIT = 3
 V6_SUBNET_LIMIT = 15000
-V6_IFACE_LIMIT = 20
+V6_IFACE_LIMIT = 2000
 
 # Name expiry: 7 days without a refresh triggers deletion.
 WEEK_SECS = 604800
