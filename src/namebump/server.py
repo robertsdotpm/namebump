@@ -57,6 +57,8 @@ from .defs import (
     V6_ADDR_EXPIRY,
     NB_PORT,
     DONT_BUMP,
+    MAX_REQUEST_TTL,
+    CLOCK_SKEW_SLACK,
 )
 
 
@@ -318,9 +320,6 @@ async def record_name(
 
     # Update an existing name.
     if name_exists:
-        # Guard against replay attacks: require that the timestamp on the
-        # update differs from the stored one.  Because requests are signed
-        # and encrypted, a replayed packet cannot forge a new timestamp.
         sql = """
         UPDATE names SET 
         value=%s,
@@ -329,7 +328,6 @@ async def record_name(
         timestamp=%s,
         updated=%s
         WHERE name=%s 
-        AND updated != %s
         """
         ret = await cur.execute(
             sql,
@@ -635,13 +633,21 @@ class Server(Daemon):
             msg = decrypt(self.reply_sk, msg)
             pkt = Packet.unpack(msg)
 
-            # Validate timestamp of signed req.
+            # Validate timestamp + signed TTL of signed req.
+            # The owner-chosen ttl rides inside the signed payload, so an
+            # attacker can't extend the validity window by rewriting it on
+            # the wire. The server still caps it at MAX_REQUEST_TTL so a
+            # leaked packet can't be replayed for an unbounded time even
+            # if the legitimate signer set ttl very large.
             if pkt.op != OP_GET:
                 now = self.sys_clock.time()
-                if pkt.updated > (now + 5):
+                if pkt.updated > (now + CLOCK_SKEW_SLACK):
                     raise ValueError("Invalid future update time.")
 
-                if (now - 5) >= pkt.updated:
+                if pkt.ttl <= 0 or pkt.ttl > MAX_REQUEST_TTL:
+                    raise ValueError("ttl out of allowed range.")
+
+                if (now - pkt.updated) > pkt.ttl:
                     raise ValueError("Signed request expired.")
 
             # Connect to local mysql server; __aexit__ closes it automatically.

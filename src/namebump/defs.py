@@ -35,3 +35,14 @@ MIN_DURATION_PENALTY = 60
 DO_BUMP = 1
 DONT_BUMP = 0
 THROW_BUMP = 2
+
+# Per-request TTL window (seconds). The packet carries its own ttl in the
+# signed payload; the server rejects requests where now - updated > ttl.
+# DEFAULT_REQUEST_TTL is what client packets request when none is supplied.
+# MAX_REQUEST_TTL caps what the server will honour, so a leaked signed
+# packet can't be replayed indefinitely just because its ttl was huge.
+DEFAULT_REQUEST_TTL = 10
+MAX_REQUEST_TTL = 60
+
+# Tolerance for client/server clock skew when checking pkt.updated.
+CLOCK_SKEW_SLACK = 5

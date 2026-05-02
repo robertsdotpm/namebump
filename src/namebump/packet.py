@@ -4,24 +4,31 @@ import time
 from typing import Optional, Union
 from ecdsa import VerifyingKey, SECP256k1, SigningKey, BadSignatureError
 from aionetiface.utility.utils import log_exception, to_b
-from .defs import DO_BUMP, NB_NAME_LEN, NB_VAL_LEN
+from .defs import DEFAULT_REQUEST_TTL, DO_BUMP, NB_NAME_LEN, NB_VAL_LEN
 
 
 class Packet:
     """Wire-protocol message for namebump get/put/delete operations.
 
-    Wire layout (fixed header = 51 bytes, followed by variable-length body):
+    Wire layout (fixed header = 59 bytes, followed by variable-length body):
         [0]       op        – 1 byte   operation code (OP_*)
         [1:5]     pkid      – 4 bytes  random packet ID (little-endian u32)
         [5:38]    reply_pk  – 33 bytes ephemeral ECIES reply key (zeros = absent)
         [38]      behavior  – 1 byte   bump behaviour flag (DO/DONT/THROW)
         [39:47]   updated   – 8 bytes  request timestamp (little-endian f64)
-        [47:49]   name_len  – 2 bytes  clamped name length
-        [49:51]   val_len   – 2 bytes  clamped value length
-        [51:]     name      – up to NB_NAME_LEN bytes
+        [47:55]   ttl       – 8 bytes  request lifetime in seconds (little-endian f64)
+        [55:57]   name_len  – 2 bytes  clamped name length
+        [57:59]   val_len   – 2 bytes  clamped value length
+        [59:]     name      – up to NB_NAME_LEN bytes
                   value     – up to NB_VAL_LEN bytes
                   vkc       – 33 bytes owner compressed public key (optional)
                   sig       – remaining bytes ECDSA signature (optional)
+
+    The ttl field is included in the signed payload (see get_msg_to_sign), so
+    a captured packet cannot be replayed past its owner-chosen window simply
+    by rewriting the ttl on the wire. The server further caps acceptable ttls
+    at MAX_REQUEST_TTL to prevent unbounded replay even by the legitimate
+    signer.
     """
 
     def __init__(
@@ -36,8 +43,10 @@ class Packet:
         pkid: Optional[int] = None,
         reply_pk: Optional[bytes] = None,
         reply_sk: Optional[SigningKey] = None,
+        ttl: Optional[float] = None,
     ) -> None:
         self.updated = updated if updated is not None else time.time()
+        self.ttl = ttl if ttl is not None else float(DEFAULT_REQUEST_TTL)
         self.op = op
         self.name = to_b(name)
         self.name_len = min(len(self.name), NB_NAME_LEN)
@@ -73,6 +82,7 @@ class Packet:
             behavior=self.behavior,
             pkid=self.pkid,
             reply_pk=self.reply_pk,
+            ttl=self.ttl,
         ).pack()
 
     def is_valid_sig(self) -> bool:
@@ -116,10 +126,16 @@ class Packet:
             len(buf)
         )
 
+        # Per-request TTL (signed): server rejects if now - updated > ttl.
+        buf += struct.pack("<d", self.ttl)
+        assert len(buf) == 55, "pack: expected 55 bytes after ttl, got {}".format(
+            len(buf)
+        )
+
         # Header (lens.)
         buf += struct.pack("<H", self.name_len)
         buf += struct.pack("<H", self.value_len)
-        assert len(buf) == 51, "pack: expected 51-byte header, got {}".format(len(buf))
+        assert len(buf) == 59, "pack: expected 59-byte header, got {}".format(len(buf))
 
         # Body (var len - limit)
         buf += self.name[:NB_NAME_LEN]
@@ -161,6 +177,10 @@ class Packet:
         updated = struct.unpack("<d", buf[p : p + 8])[0]
         p += 8
 
+        # Per-request TTL (seconds).
+        ttl = struct.unpack("<d", buf[p : p + 8])[0]
+        p += 8
+
         # Name and value lengths (clamped to their declared maximums).
         name_len = min(struct.unpack("<H", buf[p : p + 2])[0], NB_NAME_LEN)
         p += 2
@@ -178,4 +198,4 @@ class Packet:
         p += 33
         sig = buf[p:]
 
-        return Packet(op, name, val, vkc, sig, updated, behavior, pkid, reply_pk)
+        return Packet(op, name, val, vkc, sig, updated, behavior, pkid, reply_pk, ttl=ttl)
