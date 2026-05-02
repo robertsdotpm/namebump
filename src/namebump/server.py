@@ -625,13 +625,36 @@ class Server(Daemon):
         await proto_send(pipe, self.serv_resp(pkt))
 
     async def msg_cb(self, msg: bytes, client_tup: Tuple[str, int], pipe: Any) -> None:
-        """Decrypt an incoming client message, dispatch it to the appropriate handler, and send a reply."""
+        """Decrypt an incoming client message, dispatch it to the appropriate handler, and send a reply.
+
+        Every observable failure mode is logged via aionetiface's `log()`
+        so a prod operator can grep for `[serv]` lines and reconstruct
+        what the server actually saw without resorting to packet captures.
+        Lines include `client_tup` so per-source-IP misbehaviour is easy
+        to isolate.
+        """
         pkt = None
+        log(fstr("[serv] recv from {0} msg_len={1}", (client_tup, len(msg))))
         try:
             # Decrypt and serialise packet.
             pipe.stream.set_dest_tup(client_tup)
-            msg = decrypt(self.reply_sk, msg)
-            pkt = Packet.unpack(msg)
+            try:
+                msg = decrypt(self.reply_sk, msg)
+            except Exception as exc:
+                log(fstr("[serv] DECRYPT FAIL from {0}: {1!r}", (client_tup, exc)))
+                raise
+            try:
+                pkt = Packet.unpack(msg)
+            except Exception as exc:
+                log(fstr(
+                    "[serv] UNPACK FAIL from {0} decrypted_len={1}: {2!r}",
+                    (client_tup, len(msg), exc),
+                ))
+                raise
+            log(fstr(
+                "[serv] pkt op={0} pkid={1} updated={2} ttl={3} name_len={4} val_len={5}",
+                (pkt.op, pkt.pkid, pkt.updated, pkt.ttl, pkt.name_len, pkt.value_len),
+            ))
 
             # Validate timestamp + signed TTL of signed req.
             # The owner-chosen ttl rides inside the signed payload, so an
@@ -642,12 +665,24 @@ class Server(Daemon):
             if pkt.op != OP_GET:
                 now = self.sys_clock.time()
                 if pkt.updated > (now + CLOCK_SKEW_SLACK):
+                    log(fstr(
+                        "[serv] REJECT future updated={0} now={1} (slack={2})",
+                        (pkt.updated, now, CLOCK_SKEW_SLACK),
+                    ))
                     raise ValueError("Invalid future update time.")
 
                 if pkt.ttl <= 0 or pkt.ttl > MAX_REQUEST_TTL:
+                    log(fstr(
+                        "[serv] REJECT ttl out of range ttl={0} max={1}",
+                        (pkt.ttl, MAX_REQUEST_TTL),
+                    ))
                     raise ValueError("ttl out of allowed range.")
 
                 if (now - pkt.updated) > pkt.ttl:
+                    log(fstr(
+                        "[serv] REJECT expired age={0} ttl={1}",
+                        (now - pkt.updated, pkt.ttl),
+                    ))
                     raise ValueError("Signed request expired.")
 
             # Connect to local mysql server; __aexit__ closes it automatically.
@@ -659,16 +694,25 @@ class Server(Daemon):
                 # Handle request based on packet OP.
                 async with db_con.cursor() as cur:
                     if pkt.op == OP_GET:
+                        log(fstr("[serv] GET name={0!r}", (pkt.name,)))
                         return await self.handle_get(pipe, cur, pkt)
 
                     if pkt.op == OP_PUT:
-                        return await self.handle_put(pipe, cur, db_con, pkt, client_tup)
+                        log(fstr(
+                            "[serv] PUT name={0!r} from {1}",
+                            (pkt.name, client_tup),
+                        ))
+                        ret = await self.handle_put(pipe, cur, db_con, pkt, client_tup)
+                        log(fstr("[serv] PUT done name={0!r}", (pkt.name,)))
+                        return ret
 
                     if pkt.op == OP_DEL:
+                        log(fstr("[serv] DEL name={0!r}", (pkt.name,)))
                         return await self.handle_del(pipe, cur, db_con, pkt)
 
                     raise ValueError("Unknown pkt.op")
-        except (OSError, ValueError, KeyError, PermissionError, BadSignatureError):
+        except (OSError, ValueError, KeyError, PermissionError, BadSignatureError) as exc:
+            log(fstr("[serv] HANDLED EXC for {0}: {1!r}", (client_tup, exc)))
             log_exception()
             error_pkt = Packet(
                 OP_ERROR,
@@ -681,7 +725,27 @@ class Server(Daemon):
             if pkt:
                 error_pkt.reply_pk = pkt.reply_pk
 
-            await proto_send(pipe, self.serv_resp(error_pkt))
+            try:
+                await proto_send(pipe, self.serv_resp(error_pkt))
+            except Exception as send_exc:
+                log(fstr(
+                    "[serv] FAILED to send error pkt to {0}: {1!r}",
+                    (client_tup, send_exc),
+                ))
+        except BaseException as exc:
+            # The original handler only caught the explicit list of types
+            # above. Anything outside that set (e.g. mysql operational
+            # errors during connect/cursor, struct errors raised before
+            # the explicit except, asyncio cancellation re-raised in odd
+            # places) used to bubble up and tear down the connection
+            # task without sending a reply -- which manifests on the
+            # client as TCP/UDP timeouts rather than an explicit
+            # error_pkt. Log it so we can see when this path fires; let
+            # asyncio cancellation and process-exit signals through.
+            if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+                raise
+            log(fstr("[serv] UNHANDLED EXC for {0}: {1!r}", (client_tup, exc)))
+            log_exception()
 
 
 async def start_server(bind_port: int) -> "Server":

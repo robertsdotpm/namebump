@@ -440,8 +440,14 @@ class Client:
         value: Union[str, bytes],
         kp: Keypair,
         behavior: int = DO_BUMP,
+        ttl: Optional[float] = None,
     ) -> Packet:
-        """Write a signed name-value pair to the server, applying the given bump behavior."""
+        """Write a signed name-value pair to the server, applying the given bump behavior.
+
+        ttl: per-request lifetime in seconds the server will honour before
+        rejecting the signed packet as expired (see DEFAULT_REQUEST_TTL /
+        MAX_REQUEST_TTL in defs). Pass None to use the wire-format default.
+        """
         log(fstr("namebump.Client.put: name={0} dest={1}", (name, self.dest)))
 
         def attempt_for(proto: int):
@@ -455,6 +461,7 @@ class Client:
 
                     pkt = Packet(
                         OP_PUT, name, value, kp.vkc, None, t, effective_behavior,
+                        ttl=ttl,
                     )
                     log(fstr(
                         "namebump.Client.put: sending pkt to {0} via {1}",
@@ -493,7 +500,12 @@ class Client:
             )
         return ret
 
-    async def delete(self, name: Union[str, bytes], kp: Keypair) -> Packet:
+    async def delete(
+        self,
+        name: Union[str, bytes],
+        kp: Keypair,
+        ttl: Optional[float] = None,
+    ) -> Packet:
         """Send a signed delete request for name and return the server's response."""
         def attempt_for(proto: int):
             async def one_attempt() -> Packet:
@@ -501,7 +513,7 @@ class Client:
                 try:
                     t = self.sys_clock.time()
                     pipe = await self.get_dest_pipe(proto=proto)
-                    pkt = Packet(OP_DEL, name, vkc=kp.vkc, updated=t)
+                    pkt = Packet(OP_DEL, name, vkc=kp.vkc, updated=t, ttl=ttl)
                     await self.send_pkt(pipe, pkt, kp)
                     return await self.return_resp(pipe)
                 finally:
