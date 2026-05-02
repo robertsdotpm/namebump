@@ -337,8 +337,7 @@ async def record_name(
                 int(ip_id),
                 expiry,
                 req_time,
-                name,
-                req_time,
+                name
             ),
         )
         if not ret:
