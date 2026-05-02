@@ -706,6 +706,11 @@ class Server(Daemon):
                     async with conn_ctx.cursor() as cur:
                         log(fstr("[serv] aenter-cursor pkid={0}", (pkt.pkid,)))
 
+                        log(fstr(
+                            "[serv] dispatch pkid={0} op={1!r} type={2} OP_PUT={3!r}",
+                            (pkt.pkid, pkt.op, type(pkt.op).__name__, OP_PUT),
+                        ))
+
                         if pkt.op == OP_GET:
                             log(fstr("[serv] GET name={0!r}", (pkt.name,)))
                             return await self.handle_get(pipe, cur, pkt)
@@ -723,6 +728,7 @@ class Server(Daemon):
                             log(fstr("[serv] DEL name={0!r}", (pkt.name,)))
                             return await self.handle_del(pipe, cur, conn_ctx, pkt)
 
+                        log(fstr("[serv] dispatch fell-through pkid={0}", (pkt.pkid,)))
                         raise ValueError("Unknown pkt.op")
             finally:
                 log(fstr("[serv] post-handler pkid={0}", (pkt.pkid,)))
