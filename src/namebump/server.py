@@ -684,32 +684,48 @@ class Server(Daemon):
                     ))
                     raise ValueError("Signed request expired.")
 
-            # Connect to local mysql server; __aexit__ closes it automatically.
-            async with await aiomysql.connect(
-                user=self.db_user,
-                password=self.db_pass,
-                db=self.db_name,
-            ) as db_con:
-                # Handle request based on packet OP.
-                async with db_con.cursor() as cur:
-                    if pkt.op == OP_GET:
-                        log(fstr("[serv] GET name={0!r}", (pkt.name,)))
-                        return await self.handle_get(pipe, cur, pkt)
+            # Step-by-step trace -- the request sometimes silently dies
+            # between the validation pass and the PUT handler with no
+            # exception logged. Logging every await lets us pin the
+            # exact line where execution stops.
+            log(fstr("[serv] pre-mysql-connect pkid={0}", (pkt.pkid,)))
+            try:
+                db_con = await aiomysql.connect(
+                    user=self.db_user,
+                    password=self.db_pass,
+                    db=self.db_name,
+                )
+            except Exception as exc:
+                log(fstr("[serv] mysql-connect FAIL pkid={0}: {1!r}",
+                         (pkt.pkid, exc)))
+                raise
+            log(fstr("[serv] mysql-connected pkid={0}", (pkt.pkid,)))
+            try:
+                async with db_con as conn_ctx:
+                    log(fstr("[serv] aenter-conn pkid={0}", (pkt.pkid,)))
+                    async with conn_ctx.cursor() as cur:
+                        log(fstr("[serv] aenter-cursor pkid={0}", (pkt.pkid,)))
 
-                    if pkt.op == OP_PUT:
-                        log(fstr(
-                            "[serv] PUT name={0!r} from {1}",
-                            (pkt.name, client_tup),
-                        ))
-                        ret = await self.handle_put(pipe, cur, db_con, pkt, client_tup)
-                        log(fstr("[serv] PUT done name={0!r}", (pkt.name,)))
-                        return ret
+                        if pkt.op == OP_GET:
+                            log(fstr("[serv] GET name={0!r}", (pkt.name,)))
+                            return await self.handle_get(pipe, cur, pkt)
 
-                    if pkt.op == OP_DEL:
-                        log(fstr("[serv] DEL name={0!r}", (pkt.name,)))
-                        return await self.handle_del(pipe, cur, db_con, pkt)
+                        if pkt.op == OP_PUT:
+                            log(fstr(
+                                "[serv] PUT name={0!r} from {1}",
+                                (pkt.name, client_tup),
+                            ))
+                            ret = await self.handle_put(pipe, cur, conn_ctx, pkt, client_tup)
+                            log(fstr("[serv] PUT done name={0!r}", (pkt.name,)))
+                            return ret
 
-                    raise ValueError("Unknown pkt.op")
+                        if pkt.op == OP_DEL:
+                            log(fstr("[serv] DEL name={0!r}", (pkt.name,)))
+                            return await self.handle_del(pipe, cur, conn_ctx, pkt)
+
+                        raise ValueError("Unknown pkt.op")
+            finally:
+                log(fstr("[serv] post-handler pkid={0}", (pkt.pkid,)))
         except (OSError, ValueError, KeyError, PermissionError, BadSignatureError) as exc:
             log(fstr("[serv] HANDLED EXC for {0}: {1!r}", (client_tup, exc)))
             log_exception()
