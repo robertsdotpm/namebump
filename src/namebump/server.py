@@ -640,13 +640,13 @@ class Server(Daemon):
             try:
                 msg = decrypt(self.reply_sk, msg)
             except Exception as exc:
-                log(fstr("[serv] DECRYPT FAIL from {0}: {1!r}", (client_tup, exc)))
+                log(fstr("[serv] DECRYPT FAIL from {0}: {1}", (client_tup, exc)))
                 raise
             try:
                 pkt = Packet.unpack(msg)
             except Exception as exc:
                 log(fstr(
-                    "[serv] UNPACK FAIL from {0} decrypted_len={1}: {2!r}",
+                    "[serv] UNPACK FAIL from {0} decrypted_len={1}: {2}",
                     (client_tup, len(msg), exc),
                 ))
                 raise
@@ -696,7 +696,7 @@ class Server(Daemon):
                     db=self.db_name,
                 )
             except Exception as exc:
-                log(fstr("[serv] mysql-connect FAIL pkid={0}: {1!r}",
+                log(fstr("[serv] mysql-connect FAIL pkid={0}: {1}",
                          (pkt.pkid, exc)))
                 raise
             log(fstr("[serv] mysql-connected pkid={0}", (pkt.pkid,)))
@@ -707,25 +707,25 @@ class Server(Daemon):
                         log(fstr("[serv] aenter-cursor pkid={0}", (pkt.pkid,)))
 
                         log(fstr(
-                            "[serv] dispatch pkid={0} op={1!r} type={2} OP_PUT={3!r}",
+                            "[serv] dispatch pkid={0} op={1} type={2} OP_PUT={3}",
                             (pkt.pkid, pkt.op, type(pkt.op).__name__, OP_PUT),
                         ))
 
                         if pkt.op == OP_GET:
-                            log(fstr("[serv] GET name={0!r}", (pkt.name,)))
+                            log(fstr("[serv] GET name={0}", (pkt.name,)))
                             return await self.handle_get(pipe, cur, pkt)
 
                         if pkt.op == OP_PUT:
                             log(fstr(
-                                "[serv] PUT name={0!r} from {1}",
+                                "[serv] PUT name={0} from {1}",
                                 (pkt.name, client_tup),
                             ))
                             ret = await self.handle_put(pipe, cur, conn_ctx, pkt, client_tup)
-                            log(fstr("[serv] PUT done name={0!r}", (pkt.name,)))
+                            log(fstr("[serv] PUT done name={0}", (pkt.name,)))
                             return ret
 
                         if pkt.op == OP_DEL:
-                            log(fstr("[serv] DEL name={0!r}", (pkt.name,)))
+                            log(fstr("[serv] DEL name={0}", (pkt.name,)))
                             return await self.handle_del(pipe, cur, conn_ctx, pkt)
 
                         log(fstr("[serv] dispatch fell-through pkid={0}", (pkt.pkid,)))
@@ -733,7 +733,7 @@ class Server(Daemon):
             finally:
                 log(fstr("[serv] post-handler pkid={0}", (pkt.pkid,)))
         except (OSError, ValueError, KeyError, PermissionError, BadSignatureError) as exc:
-            log(fstr("[serv] HANDLED EXC for {0}: {1!r}", (client_tup, exc)))
+            log(fstr("[serv] HANDLED EXC for {0}: {1}", (client_tup, exc)))
             log_exception()
             error_pkt = Packet(
                 OP_ERROR,
@@ -750,7 +750,7 @@ class Server(Daemon):
                 await proto_send(pipe, self.serv_resp(error_pkt))
             except Exception as send_exc:
                 log(fstr(
-                    "[serv] FAILED to send error pkt to {0}: {1!r}",
+                    "[serv] FAILED to send error pkt to {0}: {1}",
                     (client_tup, send_exc),
                 ))
         except BaseException as exc:
@@ -765,7 +765,7 @@ class Server(Daemon):
             # asyncio cancellation and process-exit signals through.
             if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
                 raise
-            log(fstr("[serv] UNHANDLED EXC for {0}: {1!r}", (client_tup, exc)))
+            log(fstr("[serv] UNHANDLED EXC for {0}: {1}", (client_tup, exc)))
             log_exception()
 
 
