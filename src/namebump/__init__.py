@@ -1,5 +1,5 @@
 from .defs import DO_BUMP, DONT_BUMP, THROW_BUMP
-from .client import Client
+from .client import Client, PutRejected
 from .keypair import Keypair
 
 __all__ = [
@@ -8,4 +8,5 @@ __all__ = [
     "THROW_BUMP",
     "Client",
     "Keypair",
+    "PutRejected",
 ]

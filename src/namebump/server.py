@@ -451,6 +451,14 @@ async def verified_write_name(
     if behavior != DONT_BUMP:
         # If this fails, the whole transaction rolls back
         await verified_pruning(db_con, cur, serv, now)
+        # Commit pruning before record_ip / record_name.  Without this,
+        # a downstream ResourceLimit raise would roll back pruning along
+        # with the failed put, leaving the orphan rows behind so the
+        # next put attempt hits the same limits and fails the same way.
+        # Committing pruning independently means a failed first put
+        # still durably cleans up old state, so retries see the pruned
+        # counts.
+        await db_con.commit()
 
     # Record IP if needed and get its ID.
     # If it's V6 allocation limits are enforced on subnets.
