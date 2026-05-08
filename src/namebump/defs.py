@@ -17,8 +17,8 @@ NB_NAME_LEN = 50
 NB_VAL_LEN = 1024
 
 # Maximum names a single IPv4 / IPv6 interface address may register.
-V4_NAME_LIMIT = 20000
-V6_NAME_LIMIT = 5000
+V4_NAME_LIMIT = 200000
+V6_NAME_LIMIT = 50000
 
 # IPv6 global-prefix subnet quotas.
 V6_GLOB_LIMIT = 3
