@@ -1,4 +1,3 @@
-from typing import Optional
 from ecdsa import VerifyingKey, SECP256k1, SigningKey
 
 
@@ -12,8 +11,8 @@ class Keypair:
     """
 
     def __init__(
-        self, priv: Optional[SigningKey] = None, pub: Optional[VerifyingKey] = None
-    ) -> None:
+        self, priv=None, pub=None
+    ):
         if priv is None and pub is None:
             raise ValueError("Keypair requires at least one of priv or pub")
         self.private = priv
@@ -21,7 +20,7 @@ class Keypair:
         self.vkc = self.public.to_string("compressed")
 
     @staticmethod
-    def generate() -> "Keypair":
+    def generate():
         """Generate a new random secp256k1 keypair."""
         priv = SigningKey.generate(curve=SECP256k1)
         pub = priv.get_verifying_key()

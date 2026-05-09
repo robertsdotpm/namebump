@@ -10,7 +10,6 @@ Mirrors p2pd/tests/server_retry_helpers.py one-to-one so the pattern
 is identical across both repos -- if one is improved the other should
 follow.
 """
-from typing import Any, Callable, Iterable, Optional
 import asyncio
 
 
@@ -21,11 +20,11 @@ TRANSIENT_ERRORS = (OSError, ConnectionError, asyncio.TimeoutError)
 
 
 async def with_server_retry(
-    coro_factory: Callable[[], Any],
-    attempts: int = 3,
-    pause: float = 0.5,
-    extra_errors: Optional[tuple] = None,
-) -> Any:
+    coro_factory,
+    attempts=3,
+    pause=0.5,
+    extra_errors=None,
+):
     """Run coro_factory() up to attempts times, retrying on transient errors.
 
     coro_factory is a zero-arg callable that returns a fresh coroutine
@@ -54,10 +53,10 @@ async def with_server_retry(
 
 
 async def try_servers(
-    servers: Iterable[Any],
-    factory: Callable[[Any], Any],
-    extra_errors: Optional[tuple] = None,
-) -> Any:
+    servers,
+    factory,
+    extra_errors=None,
+):
     """Walk servers, return the first factory(server) that succeeds.
 
     factory(server) is awaitable; treat (OSError, ConnectionError,

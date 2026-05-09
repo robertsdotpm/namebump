@@ -7,7 +7,6 @@ a bunch of other non-sense.
 
 import time
 import asyncio
-from typing import Any, Optional, Tuple, Union
 from ecdsa import SECP256k1, SigningKey
 from aionetiface import (
     Interface,
@@ -103,12 +102,12 @@ class Client:
 
     def __init__(
         self,
-        dest: Tuple[str, int],
-        dest_pk: bytes,
-        sys_clock: Optional[Any] = None,
-        nic: Optional[Any] = None,
-        proto: int = TCP,
-    ) -> None:
+        dest,
+        dest_pk,
+        sys_clock=None,
+        nic=None,
+        proto=TCP,
+    ):
         """Initialize the client with a server address, its public key, and optional clock/NIC."""
         if not isinstance(dest_pk, bytes) or len(dest_pk) != 33:
             raise ValueError("dest_pk must be a 33-byte compressed public key")
@@ -129,7 +128,7 @@ class Client:
         self.afs = []
         self.addr = None
 
-    async def start(self) -> "Client":
+    async def start(self):
         """Resolve the server address and initialise the NIC and clock; return self."""
         if not self.sys_clock:
             self.sys_clock = time
@@ -157,13 +156,13 @@ class Client:
         self.af = self.afs[0]
         return self
 
-    def __await__(self) -> Any:
+    def __await__(self):
         """Allow ``await Client(...)`` as a shorthand for ``await Client(...).start()``."""
         return self.start().__await__()
 
     async def get_dest_pipe(
-        self, proto: Optional[int] = None, af: Optional[int] = None,
-    ) -> Any:
+        self, proto=None, af=None,
+    ):
         """Open and return a fresh pipe (TCP or UDP) to the namebump server.
 
         Defaults to self.proto / self.af when args are None.  race_request
@@ -209,7 +208,7 @@ class Client:
             log_exception()
             raise
 
-    async def race_request(self, build_attempt: Any) -> Any:
+    async def race_request(self, build_attempt):
         """Race a request over TCP and UDP concurrently; first success wins.
 
         build_attempt(proto) is a callable that returns a coroutine running
@@ -272,7 +271,7 @@ class Client:
                     t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def race_get_paths(self, build_attempt: Any) -> Any:
+    async def race_get_paths(self, build_attempt):
         """Race build_attempt(af, proto) across every (af, proto) combination.
 
         Used by GET only.  Reads are quota-free at the server, and v4 and
@@ -320,7 +319,7 @@ class Client:
                     t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def return_resp(self, pipe: Any) -> Packet:
+    async def return_resp(self, pipe):
         """Read, decrypt, and deserialise the server's response from the pipe.
 
         Raises ConnectionError on decrypt / unpack failure so the
@@ -356,9 +355,9 @@ class Client:
         return pkt
 
     async def send_pkt(
-        self, pipe: Any, pkt: Packet, kp: Optional[Keypair], sign: bool = True,
-        af: Optional[int] = None,
-    ) -> None:
+        self, pipe, pkt, kp, sign=True,
+        af=None,
+    ):
         """Serialise, optionally sign, encrypt, and send a packet to the server."""
         if af is None:
             af = self.af
@@ -381,7 +380,7 @@ class Client:
         if not send_success:
             raise IOError("client send pkt failure")
 
-    async def with_retry(self, attempt_coro_factory: Any) -> Any:
+    async def with_retry(self, attempt_coro_factory):
         """Run attempt_coro_factory() up to DEFAULT_RETRIES times.
 
         Retries on network-class errors (OSError, ConnectionError,
@@ -412,11 +411,11 @@ class Client:
         raise ConnectionError("Could not reach namebump server.")
 
     async def get(
-        self, name: Union[str, bytes], kp: Optional[Keypair] = None
-    ) -> Packet:
+        self, name, kp=None
+    ):
         """Fetch the value for name, optionally identifying the caller with a keypair."""
-        def attempt_for(af: int, proto: int):
-            async def one_attempt() -> Packet:
+        def attempt_for(af, proto):
+            async def one_attempt():
                 pipe = None
                 try:
                     t = self.sys_clock.time()
@@ -430,18 +429,18 @@ class Client:
                         await pipe.close()
             return one_attempt()
 
-        async def race() -> Packet:
+        async def race():
             return await self.race_get_paths(attempt_for)
         return await self.with_retry(race)
 
     async def put(
         self,
-        name: Union[str, bytes],
-        value: Union[str, bytes],
-        kp: Keypair,
-        behavior: int = DO_BUMP,
-        ttl: Optional[float] = None,
-    ) -> Packet:
+        name,
+        value,
+        kp,
+        behavior=DO_BUMP,
+        ttl=None,
+    ):
         """Write a signed name-value pair to the server, applying the given bump behavior.
 
         ttl: per-request lifetime in seconds the server will honour before
@@ -450,8 +449,8 @@ class Client:
         """
         log(fstr("namebump.Client.put: name={0} dest={1}", (name, self.dest)))
 
-        def attempt_for(proto: int):
-            async def one_attempt() -> Packet:
+        def attempt_for(proto):
+            async def one_attempt():
                 pipe = None
                 try:
                     t = self.sys_clock.time()
@@ -484,7 +483,7 @@ class Client:
                         await pipe.close()
             return one_attempt()
 
-        async def race() -> Packet:
+        async def race():
             return await self.race_request(attempt_for)
         ret = await self.with_retry(race)
         # Server clears the stored value (and updated=0) on ResourceLimit
@@ -502,13 +501,13 @@ class Client:
 
     async def delete(
         self,
-        name: Union[str, bytes],
-        kp: Keypair,
-        ttl: Optional[float] = None,
-    ) -> Packet:
+        name,
+        kp,
+        ttl=None,
+    ):
         """Send a signed delete request for name and return the server's response."""
-        def attempt_for(proto: int):
-            async def one_attempt() -> Packet:
+        def attempt_for(proto):
+            async def one_attempt():
                 pipe = None
                 try:
                     t = self.sys_clock.time()
@@ -521,7 +520,7 @@ class Client:
                         await pipe.close()
             return one_attempt()
 
-        async def race() -> Packet:
+        async def race():
             return await self.race_request(attempt_for)
         return await self.with_retry(race)
 

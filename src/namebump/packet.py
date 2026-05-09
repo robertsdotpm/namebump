@@ -1,7 +1,6 @@
 import random
 import struct
 import time
-from typing import Optional, Union
 from ecdsa import VerifyingKey, SECP256k1, SigningKey, BadSignatureError
 from aionetiface.utility.utils import log_exception, to_b
 from .defs import DEFAULT_REQUEST_TTL, DO_BUMP, NB_NAME_LEN, NB_VAL_LEN
@@ -33,18 +32,18 @@ class Packet:
 
     def __init__(
         self,
-        op: int,
-        name: Union[bytes, str],
-        value: Union[bytes, str] = b"",
-        vkc: Optional[bytes] = None,
-        sig: Optional[bytes] = None,
-        updated: Optional[float] = None,
-        behavior: int = DO_BUMP,
-        pkid: Optional[int] = None,
-        reply_pk: Optional[bytes] = None,
-        reply_sk: Optional[SigningKey] = None,
-        ttl: Optional[float] = None,
-    ) -> None:
+        op,
+        name,
+        value=b"",
+        vkc=None,
+        sig=None,
+        updated=None,
+        behavior=DO_BUMP,
+        pkid=None,
+        reply_pk=None,
+        reply_sk=None,
+        ttl=None,
+    ):
         self.updated = updated if updated is not None else time.time()
         self.ttl = ttl if ttl is not None else float(DEFAULT_REQUEST_TTL)
         self.op = op
@@ -65,12 +64,12 @@ class Packet:
                     "vkc must be 33 bytes (compressed public key), got {}".format(len(vkc))
                 )
 
-    def gen_reply_key(self) -> None:
+    def gen_reply_key(self):
         """Generate a fresh ephemeral ECDSA reply key pair and attach it to this packet."""
         self.reply_sk = SigningKey.generate(curve=SECP256k1)
         self.reply_pk = self.reply_sk.get_verifying_key().to_string("compressed")
 
-    def get_msg_to_sign(self) -> bytes:
+    def get_msg_to_sign(self):
         """Return the canonical serialised bytes that the signature covers."""
         return Packet(
             self.op,
@@ -85,7 +84,7 @@ class Packet:
             ttl=self.ttl,
         ).pack()
 
-    def is_valid_sig(self) -> bool:
+    def is_valid_sig(self):
         """Return True if the packet's ECDSA signature is valid for its vkc owner key."""
         vk = VerifyingKey.from_string(self.vkc, curve=SECP256k1)
         msg = self.get_msg_to_sign()
@@ -96,7 +95,7 @@ class Packet:
             log_exception()
             return False
 
-    def pack(self) -> bytes:
+    def pack(self):
         """Serialise the packet to its wire-format byte string."""
         buf = b""
 
@@ -150,7 +149,7 @@ class Packet:
         return buf
 
     @staticmethod
-    def unpack(buf: bytes) -> "Packet":
+    def unpack(buf):
         """Deserialise a wire-format buffer into a Packet instance."""
         # Point at start of buffer.
         p = 0

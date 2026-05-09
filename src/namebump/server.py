@@ -22,7 +22,6 @@ import sys
 import signal
 import asyncio
 import aiomysql
-from typing import Any, Optional, Tuple
 from ecdsa import VerifyingKey, SECP256k1, SigningKey, BadSignatureError
 from aionetiface import (
     Interface,
@@ -67,8 +66,8 @@ class ResourceLimit(Exception):
 
 
 async def v6_range_usage(
-    cur: Any, v6_glob_main: int, v6_glob_extra: int, v6_lan_id: int, _: Any
-) -> Tuple[int, int]:
+    cur, v6_glob_main, v6_glob_extra, v6_lan_id, _
+):
     """Return the number of subnets and interfaces used within an IPv6 global prefix."""
     # Count number of subnets used.
     sql = (
@@ -103,8 +102,8 @@ async def v6_range_usage(
 
 
 async def v6_exists(
-    cur: Any, v6_glob_main: int, v6_glob_extra: int, v6_lan_id: int, v6_iface_id: int
-) -> Tuple[bool, Optional[Any]]:
+    cur, v6_glob_main, v6_glob_extra, v6_lan_id, v6_iface_id
+):
     """Check whether an IPv6 LAN segment and full interface record exist in the DB."""
     # Check if v6 subnet component exists.
     lan_sql = (
@@ -139,13 +138,13 @@ async def v6_exists(
 
 
 async def v6_insert(
-    cur: Any,
-    v6_glob_main: int,
-    v6_glob_extra: int,
-    v6_lan_id: int,
-    v6_iface_id: int,
-    now: float,
-) -> int:
+    cur,
+    v6_glob_main,
+    v6_glob_extra,
+    v6_lan_id,
+    v6_iface_id,
+    now,
+):
     """Insert a new IPv6 address record and return its row ID."""
     # Insert a new IPv6 IP.
     sql = """INSERT INTO ipv6s
@@ -171,7 +170,7 @@ async def v6_insert(
     return cur.lastrowid
 
 
-def get_v6_parts(ipr: Any) -> Tuple[int, int, int, int]:
+def get_v6_parts(ipr):
     """Break down an IPv6 address into (glob_main, glob_extra, lan_id, iface_id) for DB storage."""
     ip_str = str(ipr)  # Normalize IPv6.
     v6_glob_main = int(ip_str[:9].replace(":", ""), 16)  # :
@@ -183,7 +182,7 @@ def get_v6_parts(ipr: Any) -> Tuple[int, int, int, int]:
     return v6_parts
 
 
-async def record_v6(params: Tuple[Any, ...], serv: Any, now: float) -> int:
+async def record_v6(params, serv, now):
     """Record an IPv6 address, enforcing subnet and interface limits, and return its row ID."""
     # Replace ipr parameter with v6_parts.
     params = (params[0],) + get_v6_parts(params[1])
@@ -214,7 +213,7 @@ async def record_v6(params: Tuple[Any, ...], serv: Any, now: float) -> int:
     return ip_id
 
 
-async def record_v4(params: Tuple[Any, ...], serv: Any, now: float) -> int:
+async def record_v4(params, serv, now):
     """Record an IPv4 address if absent and return its row ID."""
     # Main params.
     cur, ipr = params
@@ -241,7 +240,7 @@ async def record_v4(params: Tuple[Any, ...], serv: Any, now: float) -> int:
     return ip_id
 
 
-async def record_ip(af: Any, params: Tuple[Any, ...], serv: Any, now: float) -> int:
+async def record_ip(af, params, serv, now):
     """Dispatch to the AF-specific IP recorder and return the resulting row ID."""
     if af == IP6:
         return await record_v6(params, serv, now)
@@ -253,7 +252,7 @@ async def record_ip(af: Any, params: Tuple[Any, ...], serv: Any, now: float) -> 
     raise ValueError("Unsupported address family: {}".format(af))
 
 
-def name_limit_by_af(af: Any, serv: Any) -> int:
+def name_limit_by_af(af, serv):
     """Return the per-IP name limit for the given address family."""
     if af == IP4:
         return serv.v4_name_limit
@@ -262,7 +261,7 @@ def name_limit_by_af(af: Any, serv: Any) -> int:
     raise ValueError("Unsupported address family: {}".format(af))
 
 
-async def fetch_name(cur: Any, name: bytes, lock: Any = DB_WRITE_LOCK) -> Optional[Any]:
+async def fetch_name(cur, name, lock=DB_WRITE_LOCK):
     """Fetch a name row from the DB, optionally locking it for write."""
     # Does name already exist.
     if lock == DB_WRITE_LOCK:
@@ -275,7 +274,7 @@ async def fetch_name(cur: Any, name: bytes, lock: Any = DB_WRITE_LOCK) -> Option
     return row
 
 
-async def get_names_used(cur: Any, af: Any, ip_id: int) -> int:
+async def get_names_used(cur, af, ip_id):
     """Return the count of names currently owned by a given IP row."""
     sql = "SELECT id FROM names WHERE af=%s AND ip_id=%s FOR UPDATE"
     await cur.execute(sql, (int(af), int(ip_id)))
@@ -284,15 +283,15 @@ async def get_names_used(cur: Any, af: Any, ip_id: int) -> int:
 
 
 async def record_name(
-    cur: Any,
-    serv: Any,
-    af: Any,
-    ip_id: int,
-    name: bytes,
-    value: bytes,
-    owner_pub: bytes,
-    req_time: float,
-) -> Optional[Any]:
+    cur,
+    serv,
+    af,
+    ip_id,
+    name,
+    value,
+    owner_pub,
+    req_time,
+):
     """Insert or update a name record, enforcing limits and applying freshness penalties."""
     # Does name already exist.
     row = await fetch_name(cur, name)
@@ -383,7 +382,7 @@ async def record_name(
     return await fetch_name(cur, name)
 
 
-async def verified_delete_name(db_con: Any, cur: Any, name: bytes) -> None:
+async def verified_delete_name(db_con, cur, name):
     """Delete a name record from the DB if it exists, then commit."""
     row = await fetch_name(cur, name)
     if row is None:
@@ -395,7 +394,7 @@ async def verified_delete_name(db_con: Any, cur: Any, name: bytes) -> None:
     await db_con.commit()  # Commit success
 
 
-async def verified_pruning(db_con: Any, cur: Any, serv: Any, updated: float) -> None:
+async def verified_pruning(db_con, cur, serv, updated):
     """Delete expired names and any IP rows that no longer have associated names."""
     # Delete all names that haven't been updated for X seconds.
     sql = """
@@ -430,18 +429,18 @@ async def verified_pruning(db_con: Any, cur: Any, serv: Any, updated: float) -> 
 
 
 async def verified_write_name(
-    db_con: Any,
-    cur: Any,
-    serv: Any,
-    behavior: int,
-    name: bytes,
-    value: bytes,
-    owner_pub: bytes,
-    af: Any,
-    ip_str: str,
-    now: float,
-    req_time: float,
-) -> None:
+    db_con,
+    cur,
+    serv,
+    behavior,
+    name,
+    value,
+    owner_pub,
+    af,
+    ip_str,
+    now,
+    req_time,
+):
     """Record or update a name-to-IP mapping, optionally pruning stale records first."""
     # Convert ip_str into an IPRange instance.
     host_limit = 0
@@ -488,17 +487,17 @@ class Server(Daemon):
 
     def __init__(
         self,
-        db_user: str,
-        db_pass: str,
-        db_name: str,
-        reply_sk: bytes,
-        reply_pk: bytes,
-        sys_clock: Any,
-        v4_name_limit: int = V4_NAME_LIMIT,
-        v6_name_limit: int = V6_NAME_LIMIT,
-        min_name_duration: int = MIN_NAME_DURATION,
-        v6_addr_expiry: int = V6_ADDR_EXPIRY,
-    ) -> None:
+        db_user,
+        db_pass,
+        db_name,
+        reply_sk,
+        reply_pk,
+        sys_clock,
+        v4_name_limit=V4_NAME_LIMIT,
+        v6_name_limit=V6_NAME_LIMIT,
+        min_name_duration=MIN_NAME_DURATION,
+        v6_addr_expiry=V6_ADDR_EXPIRY,
+    ):
         self.db_user = db_user
         self.db_pass = db_pass
         self.db_name = db_name
@@ -514,7 +513,7 @@ class Server(Daemon):
         self.debug = False
         super().__init__()
 
-    def serv_resp(self, pkt: Packet) -> bytes:
+    def serv_resp(self, pkt):
         """Serialise a response packet, optionally encrypting it with the requester's reply key."""
         reply_pk = pkt.reply_pk
 
@@ -530,16 +529,16 @@ class Server(Daemon):
 
         return buf
 
-    def set_debug(self, val: bool) -> None:
+    def set_debug(self, val):
         """Enable or disable verbose debug output."""
         self.debug = val
 
-    def set_v6_limits(self, v6_subnet_limit: int, v6_iface_limit: int) -> None:
+    def set_v6_limits(self, v6_subnet_limit, v6_iface_limit):
         """Set per-subnet and per-interface IPv6 registration limits."""
         self.v6_subnet_limit = v6_subnet_limit
         self.v6_iface_limit = v6_iface_limit
 
-    async def handle_get(self, pipe: Any, cur: Any, pkt: Packet) -> None:
+    async def handle_get(self, pipe, cur, pkt):
         """Look up a name in the database and send its current value back to the client."""
         row = await fetch_name(cur, pkt.name, DB_READ_LOCK)
         if row:
@@ -566,8 +565,8 @@ class Server(Daemon):
         await proto_send(pipe, self.serv_resp(resp))
 
     async def handle_put(
-        self, pipe: Any, cur: Any, db_con: Any, pkt: Packet, client_tup: Tuple[str, int]
-    ) -> None:
+        self, pipe, cur, db_con, pkt, client_tup
+    ):
         """Validate the packet signature and write or update a name record in the database."""
         # Validate signature.
         if not pkt.sig or not pkt.is_valid_sig():
@@ -611,7 +610,7 @@ class Server(Daemon):
 
         await proto_send(pipe, self.serv_resp(pkt))
 
-    async def handle_del(self, pipe: Any, cur: Any, db_con: Any, pkt: Packet) -> None:
+    async def handle_del(self, pipe, cur, db_con, pkt):
         """Verify the packet signature and remove the named record from the database."""
         if not pkt.sig:
             raise PermissionError("DEL requires signature")
@@ -631,7 +630,7 @@ class Server(Daemon):
         # Return response to sender.
         await proto_send(pipe, self.serv_resp(pkt))
 
-    async def msg_cb(self, msg: bytes, client_tup: Tuple[str, int], pipe: Any) -> None:
+    async def msg_cb(self, msg, client_tup, pipe):
         """Decrypt an incoming client message, dispatch it to the appropriate handler, and send a reply.
 
         Every observable failure mode is logged via aionetiface's `log()`
@@ -777,7 +776,7 @@ class Server(Daemon):
             log_exception()
 
 
-async def start_server(bind_port: int) -> "Server":
+async def start_server(bind_port):
     """Load credentials from env/stdin, create a Server, and begin listening on all interfaces."""
     i = await Interface()
 
@@ -827,8 +826,8 @@ async def start_server(bind_port: int) -> "Server":
 
 
 def shutdown(
-    loop: asyncio.AbstractEventLoop, sig: Optional[signal.Signals] = None
-) -> None:
+    loop, sig=None
+):
     """Cancel all tasks and stop the loop on SIGINT/SIGTERM."""
     if sig:
         log(fstr("Received signal {0}, shutting down...", (sig.name,)))
