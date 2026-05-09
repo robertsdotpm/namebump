@@ -1,5 +1,7 @@
 # Namebump
 
+Part of the Warpgate project: <https://www.warpgate.io/>
+
 Namebump is a registrationless key-value store where names are claimed using
 public-key signatures. Storage is limited per IP address, requiring renewal
 as IPs change. Unused names are bumped over time if not renewed.
