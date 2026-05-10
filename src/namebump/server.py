@@ -342,7 +342,7 @@ async def record_name(
         if not ret:
             return None
 
-        row = (row[0], name, value, row[3], af, ip_id, expiry)
+        row = (row[0], name, value, row[3], af, ip_id, expiry, req_time)
         return row
 
     # Create a new name.
