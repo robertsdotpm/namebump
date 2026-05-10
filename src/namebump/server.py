@@ -411,20 +411,27 @@ async def verified_pruning(db_con, cur, serv, updated):
     )
 
     # Delete all IPs that don't have associated names.
-    for table, af in [["ipv4s", "2"], ["ipv6s", "10"]]:
-        sql = fstr(
-            """
-        DELETE FROM {0} WHERE id NOT IN (
+    sql_ipv4 = """
+        DELETE FROM ipv4s WHERE id NOT IN (
             SELECT ip_id as id
             FROM (
                 SELECT ip_id
-                FROM names 
+                FROM names
                 WHERE af=%s
             ) AS results
         );
-        """,
-            (table,),
-        )
+        """
+    sql_ipv6 = """
+        DELETE FROM ipv6s WHERE id NOT IN (
+            SELECT ip_id as id
+            FROM (
+                SELECT ip_id
+                FROM names
+                WHERE af=%s
+            ) AS results
+        );
+        """
+    for sql, af in [[sql_ipv4, "2"], [sql_ipv6, "10"]]:
         await cur.execute(sql, (af,))
 
 
