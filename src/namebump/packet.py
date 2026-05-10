@@ -192,9 +192,13 @@ class Packet:
         val = buf[p : p + val_len]
         p += val_len
 
-        # Compressed verifying key and signature.
-        vkc = buf[p : p + 33]
-        p += 33
+        # Compressed verifying key and signature (optional — absent in server responses).
+        remaining = len(buf) - p
+        if remaining >= 33:
+            vkc = buf[p : p + 33]
+            p += 33
+        else:
+            vkc = None
         sig = buf[p:]
 
         return Packet(op, name, val, vkc, sig, updated, behavior, pkid, reply_pk, ttl=ttl)
