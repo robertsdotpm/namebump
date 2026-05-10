@@ -746,6 +746,10 @@ class Server(Daemon):
                         raise ValueError("Unknown pkt.op")
             finally:
                 log(fstr("[serv] post-handler pkid={0}", (pkt.pkid,)))
+                try:
+                    db_con.close()
+                except Exception:
+                    pass
         except (OSError, ValueError, KeyError, PermissionError, BadSignatureError) as exc:
             log(fstr("[serv] HANDLED EXC for {0}: {1}", (client_tup, exc)))
             log_exception()
