@@ -766,6 +766,8 @@ class Server(Daemon):
 
             try:
                 await proto_send(pipe, self.serv_resp(error_pkt))
+            except asyncio.CancelledError:
+                raise
             except Exception as send_exc:
                 log(fstr(
                     "[serv] FAILED to send error pkt to {0}: {1}",
