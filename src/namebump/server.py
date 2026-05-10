@@ -576,7 +576,7 @@ class Server(Daemon):
     ):
         """Validate the packet signature and write or update a name record in the database."""
         # Validate signature.
-        if not pkt.sig or not pkt.is_valid_sig():
+        if not pkt.vkc or not pkt.sig or not pkt.is_valid_sig():
             raise PermissionError("PUT requires valid signature")
 
         # Ensure signature for update is correct.
