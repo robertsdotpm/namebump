@@ -708,6 +708,7 @@ class Server(Daemon):
                     user=self.db_user,
                     password=self.db_pass,
                     db=self.db_name,
+                    connect_timeout=10,
                 )
             except Exception as exc:
                 log(fstr("[serv] mysql-connect FAIL pkid={0}: {1}",
