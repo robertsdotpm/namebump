@@ -6,7 +6,7 @@ it goes up, down, and hits per-IP quotas. Tests that fire one request
 and fail on the first transient error gate-halt the matrix on
 genuine ENV issues that any single retry would have absorbed.
 
-Mirrors p2pd/tests/server_retry_helpers.py one-to-one so the pattern
+Mirrors warpgate/tests/server_retry_helpers.py one-to-one so the pattern
 is identical across both repos -- if one is improved the other should
 follow.
 """
