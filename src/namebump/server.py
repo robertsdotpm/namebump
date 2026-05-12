@@ -830,8 +830,6 @@ async def start_server(bind_port):
     )
 
     # Start the server listening on public routes.
-    print("Now starting namebump serv on ...")
-    print(reply_pk_hex)
 
     for proto in [TCP, UDP]:
         await serv.listen_all(proto, bind_port, i)

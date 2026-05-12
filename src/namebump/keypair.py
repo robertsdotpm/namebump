@@ -29,4 +29,3 @@ class Keypair:
 
 if __name__ == "__main__":
     kp = Keypair.generate()
-    print(kp.private)

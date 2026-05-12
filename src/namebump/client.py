@@ -534,15 +534,11 @@ if __name__ == "__main__":
         client = await Client(DEST, PK)
 
         out = await client.put(name, "value", kp)
-        print(out)
 
         out = await client.get(name)
-        print(out)
 
         out = await client.delete(name, kp)
-        print(out)
 
         out = await client.get(name, kp)
-        print(out)
 
     async_run(workspace())
