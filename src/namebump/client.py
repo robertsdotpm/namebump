@@ -5,6 +5,7 @@ a bunch of other non-sense.
 
 """
 
+import json
 import time
 import asyncio
 from ecdsa import SECP256k1, SigningKey
@@ -534,8 +535,6 @@ class Client:
         rejection just like put/delete.  Read-only on the server --
         does not modify any state.
         """
-        import json as _json
-
         def attempt_for(proto):
             async def one_attempt():
                 pipe = None
@@ -559,7 +558,7 @@ class Client:
         if ret is None or ret.value is None:
             return None
         try:
-            return _json.loads(ret.value.decode("utf-8"))
+            return json.loads(ret.value.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             return None
 

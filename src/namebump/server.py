@@ -19,6 +19,7 @@ that uses IP limits to reduce spam.
 
 import os
 import sys
+import json
 import signal
 import asyncio
 import aiomysql
@@ -629,9 +630,7 @@ class Server(Daemon):
         if not pkt.vkc or not pkt.sig or not pkt.is_valid_sig():
             raise PermissionError("USAGE requires valid signature")
 
-        import json as _json
         af = pipe.route.af
-        client_ip = str(IPRange(client_tup[0], bitlen=0))
 
         names_used = 0
         # Only v4 ip lookup is supported in this first cut -- the v6
@@ -658,7 +657,7 @@ class Server(Daemon):
         resp = Packet(
             op=OP_USAGE,
             name=pkt.name,
-            value=_json.dumps(info).encode("utf-8"),
+            value=json.dumps(info).encode("utf-8"),
             updated=self.sys_clock.time(),
             vkc=pkt.vkc,
             pkid=pkt.pkid,
