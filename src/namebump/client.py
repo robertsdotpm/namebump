@@ -27,7 +27,7 @@ from aionetiface.net.net_defs import NET_CONF
 from aionetiface.vendor.ecies import encrypt, decrypt
 from .packet import Packet
 from .keypair import Keypair
-from .defs import OP_GET, OP_PUT, OP_DEL, DO_BUMP, DONT_BUMP, THROW_BUMP
+from .defs import OP_GET, OP_PUT, OP_DEL, OP_USAGE, DO_BUMP, DONT_BUMP, THROW_BUMP
 
 DEST = ("ovh1.p2pd.net", 5300)
 PK = h_to_b("03f20b5dcfa5d319635a34f18cb47b339c34f515515a5be733cd7a7f8494e97136")
@@ -523,6 +523,45 @@ class Client:
         async def race():
             return await self.race_request(attempt_for)
         return await self.with_retry(race)
+
+    async def usage(self, kp, ttl=None):
+        """Signed-owner query for the per-IP name quota state.
+
+        Returns a dict ``{"af": int, "names_used": int, "name_limit": int}``
+        describing how many names the requesting client_ip currently
+        holds on the AF this connection is using, against the cap.
+        Raises ``namebump.PutRejected`` (parent type) on a server-side
+        rejection just like put/delete.  Read-only on the server --
+        does not modify any state.
+        """
+        import json as _json
+
+        def attempt_for(proto):
+            async def one_attempt():
+                pipe = None
+                try:
+                    t = self.sys_clock.time()
+                    pipe = await self.get_dest_pipe(proto=proto)
+                    pkt = Packet(
+                        OP_USAGE, name=b"", value=b"",
+                        vkc=kp.vkc, updated=t, ttl=ttl,
+                    )
+                    await self.send_pkt(pipe, pkt, kp)
+                    return await self.return_resp(pipe)
+                finally:
+                    if pipe is not None:
+                        await pipe.close()
+            return one_attempt()
+
+        async def race():
+            return await self.race_request(attempt_for)
+        ret = await self.with_retry(race)
+        if ret is None or ret.value is None:
+            return None
+        try:
+            return _json.loads(ret.value.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return None
 
 
 if __name__ == "__main__":
