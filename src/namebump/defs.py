@@ -2,6 +2,12 @@ OP_GET = 0
 OP_PUT = 1
 OP_DEL = 2
 OP_ERROR = 3
+# Signed-owner-only query for the per-IP name quota state (used + cap)
+# of the AF the request came in over.  Server reply puts a JSON-
+# encoded {names_used, name_limit, af} blob in the packet's value
+# field.  No name field is consulted; the response is keyed entirely
+# by the requesting client_ip's quota row.
+OP_USAGE = 4
 
 NB_PORT = 5300
 
@@ -25,12 +31,18 @@ V6_GLOB_LIMIT = 3
 V6_SUBNET_LIMIT = 15000
 V6_IFACE_LIMIT = 20
 
-# Name expiry: 7 days without a refresh triggers deletion.
-WEEK_SECS = 604800
-V6_ADDR_EXPIRY = WEEK_SECS
-MIN_NAME_DURATION = WEEK_SECS
-# Minimum penalty so very low usage still imposes some backpressure.
-MIN_DURATION_PENALTY = 60
+# Name expiry: 30 days without a refresh triggers deletion.
+# Raised from 7 days because the previous lifetime combined with the
+# quota-based penalty (now removed) made records appear to vanish
+# unpredictably soon after registration -- users would register a
+# nickname, see it pruned out hours or days later, and have no
+# obvious cause.  30 days gives breathing room for occasional users
+# while still GC-ing abandoned names eventually.
+DAY_SECS = 86400
+MONTH_SECS = 30 * DAY_SECS
+WEEK_SECS = 7 * DAY_SECS   # retained for back-compat with imports
+V6_ADDR_EXPIRY = MONTH_SECS
+MIN_NAME_DURATION = MONTH_SECS
 
 DO_BUMP = 1
 DONT_BUMP = 0

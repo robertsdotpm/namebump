@@ -19,6 +19,7 @@ that uses IP limits to reduce spam.
 
 import os
 import sys
+import json
 import signal
 import asyncio
 import aiomysql
@@ -46,11 +47,11 @@ from .defs import (
     OP_GET,
     OP_PUT,
     OP_DEL,
+    OP_USAGE,
     OP_ERROR,
     V4_NAME_LIMIT,
     V6_NAME_LIMIT,
     MIN_NAME_DURATION,
-    MIN_DURATION_PENALTY,
     V6_SUBNET_LIMIT,
     V6_IFACE_LIMIT,
     V6_ADDR_EXPIRY,
@@ -292,30 +293,27 @@ async def record_name(
     owner_pub,
     req_time,
 ):
-    """Insert or update a name record, enforcing limits and applying freshness penalties."""
+    """Insert or update a name record, enforcing the per-IP name limit."""
     # Does name already exist.
     row = await fetch_name(cur, name)
     name_exists = row is not None
 
-    # Get names used and limit.
+    # Get names used and limit.  Used below to decide whether a new
+    # insert is permitted; previously also used to compute a
+    # freshness penalty that subtracted from the record's lifetime,
+    # but that produced surprising behaviour -- a user with 19/20
+    # names had any new registration stored as nearly-expired and
+    # could see it pruned almost immediately, with no externally
+    # visible reason.  The cap is now a flat "new inserts above the
+    # limit are rejected"; existing records get the full lifetime.
     names_used = await get_names_used(cur, af, ip_id)
     name_limit = name_limit_by_af(af, serv)
 
-    # Penalty: the more names an IP holds, the shorter the refresh window.
-    # This rewards conservation of the shared name namespace.
-    if names_used:
-        if names_used >= name_limit:
-            p_names_used = 1
-        else:
-            p_names_used = names_used / name_limit
-
-        penalty = int(MIN_NAME_DURATION * p_names_used) + 1
-        penalty = max(penalty, MIN_DURATION_PENALTY)
-    else:
-        penalty = 0
-
-    # Apply penalty given req_time.
-    expiry = max(req_time - penalty, 0)
+    # Store the unmodified request time as the freshness anchor.
+    # Pruning condition is now-timestamp >= MIN_NAME_DURATION, so a
+    # record stored with timestamp=req_time lasts exactly one full
+    # MIN_NAME_DURATION before being eligible for deletion.
+    expiry = req_time
 
     # Update an existing name.
     if name_exists:
@@ -617,6 +615,56 @@ class Server(Daemon):
 
         await proto_send(pipe, self.serv_resp(pkt))
 
+    async def handle_usage(self, pipe, cur, pkt, client_tup):
+        """Signed-owner query for the per-IP quota state.
+
+        Reports how many names the requesting client_ip currently
+        holds against the cap, on whichever AF the request arrived
+        over.  Read-only: never creates an ip row, never modifies
+        anything in the db.
+
+        Reply body: JSON-encoded
+            {"af": <2|10>, "names_used": <int>, "name_limit": <int>}
+        in the packet's value field.
+        """
+        if not pkt.vkc or not pkt.sig or not pkt.is_valid_sig():
+            raise PermissionError("USAGE requires valid signature")
+
+        af = pipe.route.af
+
+        names_used = 0
+        # Only v4 ip lookup is supported in this first cut -- the v6
+        # ip row keys on a 4-tuple (glob_main, glob_extra, lan_id,
+        # iface_id) rather than a single integer, so a clean fetch-
+        # only helper for v6 needs more plumbing.  For v6 callers the
+        # response correctly reports the v6 cap but names_used=0 if
+        # no row exists yet (which is the common case).
+        if int(af) == int(IP4):
+            sql = "SELECT id FROM ipv4s WHERE v4_val=%s"
+            await cur.execute(sql, (int(IPRange(client_tup[0], bitlen=0)),))
+            row = await cur.fetchone()
+            if row is not None:
+                ip_id = row[0]
+                names_used = await get_names_used(cur, af, ip_id)
+
+        name_limit = name_limit_by_af(af, self)
+
+        info = {
+            "af": int(af),
+            "names_used": int(names_used),
+            "name_limit": int(name_limit),
+        }
+        resp = Packet(
+            op=OP_USAGE,
+            name=pkt.name,
+            value=json.dumps(info).encode("utf-8"),
+            updated=self.sys_clock.time(),
+            vkc=pkt.vkc,
+            pkid=pkt.pkid,
+            reply_pk=pkt.reply_pk,
+        )
+        await proto_send(pipe, self.serv_resp(resp))
+
     async def handle_del(self, pipe, cur, db_con, pkt):
         """Verify the packet signature and remove the named record from the database."""
         if not pkt.sig:
@@ -742,6 +790,12 @@ class Server(Daemon):
                         if pkt.op == OP_DEL:
                             log(fstr("[serv] DEL name={0}", (pkt.name,)))
                             return await self.handle_del(pipe, cur, conn_ctx, pkt)
+
+                        if pkt.op == OP_USAGE:
+                            log(fstr(
+                                "[serv] USAGE from {0}", (client_tup,),
+                            ))
+                            return await self.handle_usage(pipe, cur, pkt, client_tup)
 
                         log(fstr("[serv] dispatch fell-through pkid={0}", (pkt.pkid,)))
                         raise ValueError("Unknown pkt.op")

@@ -2,8 +2,9 @@ from setuptools import setup, find_packages
 
 setup(
     name="namebump",
-    version="0.0.9",
+    version="0.0.13",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
-    install_requires=["aionetiface", "ecdsa", "aiomysql"],
+    install_requires=["aionetiface", "ecdsa"],
+    python_requires=">=3.5",
 )
