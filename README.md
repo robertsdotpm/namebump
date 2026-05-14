@@ -35,20 +35,26 @@ async def main():
     # Connect.  `await Client(...)` runs .start() implicitly.
     client = await namebump.Client(DEST, PK)
 
-    # Claim a name and store a value under it.  First successful PUT
-    # binds the name to kp's public key; subsequent PUTs for the same
-    # name must be signed by the same key.
-    await client.put("my_unique_name", b"hello world", kp)
+    # Pick a name.  Deriving it from the keypair's public key makes it
+    # unique per-keypair so this snippet doesn't collide with anyone
+    # else running the same example -- in real code you'd choose a
+    # human-readable name you care about owning.
+    name = "demo_" + kp.vkc.hex()[:16]
+
+    # Claim it and store a value.  First successful PUT binds the name
+    # to kp's public key; subsequent PUTs for the same name must be
+    # signed by the same key.
+    await client.put(name, b"hello world", kp)
 
     # Read it back.  GET is unsigned -- any client can read any name.
-    pkt = await client.get("my_unique_name")
+    pkt = await client.get(name)
     print(pkt.value)  # -> b"hello world"
 
     # Update it.  Same call shape -- PUT is upsert when you own the name.
-    await client.put("my_unique_name", b"new value", kp)
+    await client.put(name, b"new value", kp)
 
     # Delete it.  Requires the owning keypair.
-    await client.delete("my_unique_name", kp)
+    await client.delete(name, kp)
 
 
 asyncio.run(main())
