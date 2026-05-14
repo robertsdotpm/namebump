@@ -205,8 +205,15 @@ class Client:
                 raise ConnectionError("Could not connect to namebump server.")
             log(fstr("namebump.get_dest_pipe: connected, returning pipe", ()))
             return pipe
-        except (OSError, ConnectionError, asyncio.TimeoutError):
-            log_exception()
+        except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
+            # Caller (race_request / with_retry) sees the re-raised
+            # exception and decides retry / fallback.  Skip the full
+            # traceback -- this fires whenever a PNP server is briefly
+            # unreachable, which is expected during the cascade.
+            log(fstr(
+                "namebump.get_dest_pipe: {0}: {1}",
+                (type(exc).__name__, str(exc) or "(no message)"),
+            ))
             raise
 
     async def race_request(self, build_attempt):
@@ -245,8 +252,14 @@ class Client:
                     return result
                 except asyncio.CancelledError:  # pylint: disable=try-except-raise
                     raise
-                except (OSError, ConnectionError, asyncio.TimeoutError):
-                    log_exception()
+                except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
+                    # First-finisher errored.  Expected when one
+                    # transport (UDP/TCP) is blocked but the other
+                    # works; the laggard below may still succeed.
+                    log(fstr(
+                        "namebump.race_request: first-finisher {0}: {1}",
+                        (type(exc).__name__, str(exc) or "(no message)"),
+                    ))
 
             # First finisher errored; let the laggard run to completion
             # without cancelling it. with_retry one frame up will catch
@@ -256,8 +269,11 @@ class Client:
                     return await t
                 except asyncio.CancelledError:  # pylint: disable=try-except-raise
                     raise
-                except (OSError, ConnectionError, asyncio.TimeoutError):
-                    log_exception()
+                except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
+                    log(fstr(
+                        "namebump.race_request: laggard {0}: {1}",
+                        (type(exc).__name__, str(exc) or "(no message)"),
+                    ))
 
             # Both transports failed.
             raise ConnectionError(
