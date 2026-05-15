@@ -317,14 +317,33 @@ async def record_name(
 
     # Update an existing name.
     if name_exists:
+        # The per-IP cap below only guards the INSERT path, but an
+        # UPDATE can also reassign ip_id -- a name re-registered from
+        # a different source IP.  Relocating a name onto an IP that is
+        # already at the limit slips one past the cap: the destination
+        # ends up with name_limit + 1 names (this is exactly how a
+        # 21/20 quota state arises).  When the update actually moves
+        # the name (its stored af / ip_id differ from the request's),
+        # enforce the same limit against the destination.  names_used
+        # was counted for the destination (af, ip_id) and does NOT
+        # include this name yet -- it still lives on the old row -- so
+        # a plain >= comparison is correct.  An in-place refresh (same
+        # af and ip_id) skips the check: the name is already counted
+        # there and must always be allowed to refresh its value.
+        old_af = int(row[4])
+        old_ip_id = int(row[5])
+        relocating = (old_af, old_ip_id) != (int(af), int(ip_id))
+        if relocating and names_used >= name_limit:
+            raise ResourceLimit("insert name limit reached.")
+
         sql = """
-        UPDATE names SET 
+        UPDATE names SET
         value=%s,
         af=%s,
         ip_id=%s,
         timestamp=%s,
         updated=%s
-        WHERE name=%s 
+        WHERE name=%s
         """
         ret = await cur.execute(
             sql,
