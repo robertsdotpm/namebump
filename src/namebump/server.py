@@ -714,7 +714,6 @@ class Server(Daemon):
         to isolate.
         """
         pkt = None
-        log(fstr("[serv] recv from {0} msg_len={1}", (client_tup, len(msg))))
         try:
             # Decrypt and serialise packet.
             pipe.stream.set_dest_tup(client_tup)
@@ -731,6 +730,7 @@ class Server(Daemon):
                     (client_tup, len(msg), exc),
                 ))
                 raise
+
             log(fstr(
                 "[serv] pkt op={0} pkid={1} updated={2} ttl={3} name_len={4} val_len={5}",
                 (pkt.op, pkt.pkid, pkt.updated, pkt.ttl, pkt.name_len, pkt.value_len),
@@ -781,6 +781,7 @@ class Server(Daemon):
                 log(fstr("[serv] mysql-connect FAIL pkid={0}: {1}",
                          (pkt.pkid, exc)))
                 raise
+            
             log(fstr("[serv] mysql-connected pkid={0}", (pkt.pkid,)))
             try:
                 async with db_con as conn_ctx:
