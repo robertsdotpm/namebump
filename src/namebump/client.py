@@ -26,6 +26,7 @@ from aionetiface import (
     to_b,
 )
 from aionetiface.net.net_defs import NET_CONF
+from aionetiface.utility.signing import ecdsa_sign_async
 from aionetiface.vendor.ecies import encrypt, decrypt
 from .packet import Packet
 from .keypair import Keypair
@@ -373,7 +374,11 @@ class Client:
         pkt.reply_pk = self.reply_pk
         msg = pkt.get_msg_to_sign()
         if sign:
-            sig = kp.private.sign(msg)
+            # ECDSA sign (~2-10ms) via the shared
+            # aionetiface.utility.signing.ecdsa_sign_async helper so
+            # the client's event loop stays free for concurrent
+            # in-flight requests / response readers.
+            sig = await ecdsa_sign_async(kp.private, msg)
         else:
             sig = b""
 
