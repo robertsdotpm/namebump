@@ -27,7 +27,6 @@ V4_NAME_LIMIT = 20
 V6_NAME_LIMIT = 5
 
 # IPv6 global-prefix subnet quotas.
-V6_GLOB_LIMIT = 3
 V6_SUBNET_LIMIT = 15000
 V6_IFACE_LIMIT = 20
 
@@ -40,7 +39,6 @@ V6_IFACE_LIMIT = 20
 # while still GC-ing abandoned names eventually.
 DAY_SECS = 86400
 MONTH_SECS = 30 * DAY_SECS
-WEEK_SECS = 7 * DAY_SECS   # retained for back-compat with imports
 V6_ADDR_EXPIRY = MONTH_SECS
 MIN_NAME_DURATION = MONTH_SECS
 

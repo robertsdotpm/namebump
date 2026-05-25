@@ -3,6 +3,7 @@ import struct
 import time
 from ecdsa import VerifyingKey, SECP256k1, SigningKey, BadSignatureError
 from aionetiface.utility.utils import log_exception, to_b
+from aionetiface.utility.signing import ecdsa_verify_async
 from .defs import DEFAULT_REQUEST_TTL, DO_BUMP, NB_NAME_LEN, NB_VAL_LEN
 
 
@@ -85,11 +86,34 @@ class Packet:
         ).pack()
 
     def is_valid_sig(self):
-        """Return True if the packet's ECDSA signature is valid for its vkc owner key."""
+        """Return True if the packet's ECDSA signature is valid for its vkc owner key.
+
+        Sync entry point.  Blocks the caller for one ECDSA verify
+        (~2-10ms).  Async callers should use `is_valid_sig_async`
+        instead to keep the event loop free.
+        """
         vk = VerifyingKey.from_string(self.vkc, curve=SECP256k1)
         msg = self.get_msg_to_sign()
         try:
             vk.verify(self.sig, msg)
+            return True
+        except BadSignatureError:
+            log_exception()
+            return False
+
+    async def is_valid_sig_async(self):
+        """Async variant of is_valid_sig that runs the ECDSA verify on
+        the default thread pool executor via the shared
+        aionetiface.utility.signing.ecdsa_verify_async helper.  Used by
+        the server's hot-path handlers (handle_put, handle_usage) which
+        execute on every inbound nickname request.  Returns True / False
+        the same way is_valid_sig does; BadSignatureError from the
+        executor is caught and converted.
+        """
+        vk = VerifyingKey.from_string(self.vkc, curve=SECP256k1)
+        msg = self.get_msg_to_sign()
+        try:
+            await ecdsa_verify_async(vk, self.sig, msg)
             return True
         except BadSignatureError:
             log_exception()

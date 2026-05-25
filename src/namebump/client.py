@@ -23,8 +23,10 @@ from aionetiface import (
     async_run,
     rand_plain,
     proto_recv,
+    to_b,
 )
 from aionetiface.net.net_defs import NET_CONF
+from aionetiface.utility.signing import ecdsa_sign_async
 from aionetiface.vendor.ecies import encrypt, decrypt
 from .packet import Packet
 from .keypair import Keypair
@@ -175,10 +177,7 @@ class Client:
             proto = self.proto
         if af is None:
             af = self.af
-        log(fstr(
-            "namebump.get_dest_pipe: dest={0} af={1} proto={2}",
-            (self.dest, af, "UDP" if proto == UDP else "TCP"),
-        ))
+
         route = self.nic.route(af)
 
         # Bind to the loopback address explicitly so the connection succeeds.
@@ -189,7 +188,6 @@ class Client:
             route = await route.bind(ips=self.dest[0])
         else:
             route = await route.bind()
-        log(fstr("namebump.get_dest_pipe: bound, opening pipe", ()))
 
         # Open the pipe. For TCP this performs the SYN/SYN-ACK handshake
         # under the bumped 6s con_timeout. For UDP, .connect() just
@@ -201,19 +199,14 @@ class Client:
                 proto, self.addr, route, conf=NAMEBUMP_PIPE_CONF,
             ).connect()
             if pipe is None:
-                log(fstr("namebump.get_dest_pipe: Pipe.connect returned None", ()))
                 raise ConnectionError("Could not connect to namebump server.")
-            log(fstr("namebump.get_dest_pipe: connected, returning pipe", ()))
+
             return pipe
         except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
             # Caller (race_request / with_retry) sees the re-raised
             # exception and decides retry / fallback.  Skip the full
             # traceback -- this fires whenever a PNP server is briefly
             # unreachable, which is expected during the cascade.
-            log(fstr(
-                "namebump.get_dest_pipe: {0}: {1}",
-                (type(exc).__name__, str(exc) or "(no message)"),
-            ))
             raise
 
     async def race_request(self, build_attempt):
@@ -348,9 +341,9 @@ class Client:
         check inside ecies sym_decrypt raises AssertionError. That's
         an "I/O quality" issue, not a logic bug.
         """
-        log(fstr("namebump.return_resp: awaiting proto_recv from {0}", (self.dest,)))
+
         buf = await proto_recv(pipe)
-        log(fstr("namebump.return_resp: got {0} bytes", (len(buf) if buf else 0,)))
+
         # proto_recv returns None on timeout / closed pipe. Without this guard
         # the None falls into decrypt() and crashes on msg[0:33] with a
         # TypeError that the with_retry/race layers don't classify as
@@ -381,7 +374,11 @@ class Client:
         pkt.reply_pk = self.reply_pk
         msg = pkt.get_msg_to_sign()
         if sign:
-            sig = kp.private.sign(msg)
+            # ECDSA sign (~2-10ms) via the shared
+            # aionetiface.utility.signing.ecdsa_sign_async helper so
+            # the client's event loop stays free for concurrent
+            # in-flight requests / response readers.
+            sig = await ecdsa_sign_async(kp.private, msg)
         else:
             sig = b""
 
@@ -414,10 +411,7 @@ class Client:
             except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
                 last_exc = exc
                 log_exception()
-                log(fstr(
-                    "namebump.Client retry: dest={0} attempt={1}/{2} err={3}",
-                    (self.dest, attempt + 1, DEFAULT_RETRIES, repr(exc)),
-                ))
+
             if attempt + 1 < DEFAULT_RETRIES:
                 await asyncio.sleep(DEFAULT_RETRY_PAUSE)
         # All attempts failed -- re-raise the last network error so the
@@ -431,6 +425,8 @@ class Client:
         self, name, kp=None
     ):
         """Fetch the value for name, optionally identifying the caller with a keypair."""
+        expected_name = to_b(name)
+
         def attempt_for(af, proto):
             async def one_attempt():
                 pipe = None
@@ -440,7 +436,47 @@ class Client:
                     vkc = kp.vkc if kp else self.reply_pk
                     pkt = Packet(OP_GET, name, vkc=vkc, updated=t)
                     await self.send_pkt(pipe, pkt, kp, sign=bool(kp), af=af)
-                    return await self.return_resp(pipe)
+                    resp = await self.return_resp(pipe)
+                    # Validate the response matches the request.  return_resp
+                    # only proves the packet decrypted under our reply key;
+                    # it doesn't prove this server reply is the answer to
+                    # THIS query.  Two ways the wrong reply can land here:
+                    #
+                    # 1. UDP socket-port reuse -- a late put-ACK from an
+                    #    earlier Nickname.put on the same Client instance
+                    #    can sit in the kernel buffer of a freshly-opened
+                    #    UDP socket if the ephemeral port is recycled and
+                    #    the dest (host, port) matches.  decrypt() succeeds
+                    #    because the reply key is the same for puts and gets.
+                    #
+                    # 2. race_get_paths fires TCP + UDP concurrently and
+                    #    FIRST_COMPLETED wins -- a stray UDP datagram with
+                    #    a different op or name then beats the correct TCP
+                    #    answer and gets returned to Nickname.get.
+                    #
+                    # Both produce a deeply surprising failure where the
+                    # caller acts on a peer addr that belongs to a totally
+                    # different nickname.  Treat mismatches as transient so
+                    # with_retry / race_get_paths drains the kernel buffer
+                    # and tries again on a fresh socket.
+                    if resp is None:
+                        raise ConnectionError(
+                            "namebump get: empty response"
+                        )
+                    if getattr(resp, "op", None) != OP_GET:
+                        raise ConnectionError(fstr(
+                            "namebump get: op mismatch (got {0}, expected "
+                            "{1}) -- likely stray put-response on a "
+                            "recycled UDP port",
+                            (getattr(resp, "op", None), OP_GET),
+                        ))
+                    if getattr(resp, "name", None) != expected_name:
+                        raise ConnectionError(fstr(
+                            "namebump get: name mismatch (got {0}, expected "
+                            "{1}) -- response is for a different nickname",
+                            (getattr(resp, "name", None), expected_name),
+                        ))
+                    return resp
                 finally:
                     if pipe is not None:
                         await pipe.close()
@@ -464,8 +500,6 @@ class Client:
         rejecting the signed packet as expired (see DEFAULT_REQUEST_TTL /
         MAX_REQUEST_TTL in defs). Pass None to use the wire-format default.
         """
-        log(fstr("namebump.Client.put: name={0} dest={1}", (name, self.dest)))
-
         def attempt_for(proto):
             async def one_attempt():
                 pipe = None
@@ -479,17 +513,10 @@ class Client:
                         OP_PUT, name, value, kp.vkc, None, t, effective_behavior,
                         ttl=ttl,
                     )
-                    log(fstr(
-                        "namebump.Client.put: sending pkt to {0} via {1}",
-                        (self.dest, "UDP" if proto == UDP else "TCP"),
-                    ))
+
                     await self.send_pkt(pipe, pkt, kp)
 
                     ret = await self.return_resp(pipe)
-                    log(fstr(
-                        "namebump.Client.put: response via {0} ret={1}",
-                        ("UDP" if proto == UDP else "TCP", ret),
-                    ))
                     if throw_bump and not ret.value:
                         # Application-level signal -- not a network failure,
                         # so it propagates through with_retry without retrying.

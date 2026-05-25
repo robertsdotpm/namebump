@@ -41,6 +41,7 @@ from aionetiface import (
     proto_send,
 )
 from aionetiface.net.daemon import Daemon
+from aionetiface.utility.signing import ecdsa_verify_async
 from aionetiface.vendor.ecies import encrypt, decrypt
 from .packet import Packet
 from .defs import (
@@ -592,15 +593,21 @@ class Server(Daemon):
         self, pipe, cur, db_con, pkt, client_tup
     ):
         """Validate the packet signature and write or update a name record in the database."""
-        # Validate signature.
-        if not pkt.vkc or not pkt.sig or not pkt.is_valid_sig():
+        # Validate signature.  ECDSA verify (~2-10ms) runs on the
+        # default thread pool executor so the event loop stays free
+        # under concurrent load.
+        if not pkt.vkc or not pkt.sig or not await pkt.is_valid_sig_async():
             raise PermissionError("PUT requires valid signature")
 
         # Ensure signature for update is correct.
         row = await fetch_name(cur, pkt.name, DB_READ_LOCK)
         if row:
             vk = VerifyingKey.from_string(row[3], curve=SECP256k1)
-            vk.verify(pkt.sig, pkt.get_msg_to_sign())
+            # vk.verify raises BadSignatureError on mismatch; the
+            # shared executor-offloaded helper propagates the
+            # exception via the awaited future.  Offload for the
+            # same event-loop reason as above.
+            await ecdsa_verify_async(vk, pkt.sig, pkt.get_msg_to_sign())
 
         # Allow write or update.
         try:
@@ -646,7 +653,7 @@ class Server(Daemon):
             {"af": <2|10>, "names_used": <int>, "name_limit": <int>}
         in the packet's value field.
         """
-        if not pkt.vkc or not pkt.sig or not pkt.is_valid_sig():
+        if not pkt.vkc or not pkt.sig or not await pkt.is_valid_sig_async():
             raise PermissionError("USAGE requires valid signature")
 
         af = pipe.route.af
@@ -694,9 +701,10 @@ class Server(Daemon):
         if row is None:
             return await proto_send(pipe, self.serv_resp(pkt))
 
-        # Ensure signature is correct.
+        # Ensure signature is correct.  Offload to executor for the
+        # same event-loop reason as handle_put / handle_usage.
         vk = VerifyingKey.from_string(row[3], curve=SECP256k1)
-        vk.verify(pkt.sig, pkt.get_msg_to_sign())
+        await ecdsa_verify_async(vk, pkt.sig, pkt.get_msg_to_sign())
 
         # Complete delete operation.
         await verified_delete_name(db_con, cur, pkt.name)
@@ -714,7 +722,6 @@ class Server(Daemon):
         to isolate.
         """
         pkt = None
-        log(fstr("[serv] recv from {0} msg_len={1}", (client_tup, len(msg))))
         try:
             # Decrypt and serialise packet.
             pipe.stream.set_dest_tup(client_tup)
@@ -731,6 +738,7 @@ class Server(Daemon):
                     (client_tup, len(msg), exc),
                 ))
                 raise
+
             log(fstr(
                 "[serv] pkt op={0} pkid={1} updated={2} ttl={3} name_len={4} val_len={5}",
                 (pkt.op, pkt.pkid, pkt.updated, pkt.ttl, pkt.name_len, pkt.value_len),
@@ -781,6 +789,7 @@ class Server(Daemon):
                 log(fstr("[serv] mysql-connect FAIL pkid={0}: {1}",
                          (pkt.pkid, exc)))
                 raise
+            
             log(fstr("[serv] mysql-connected pkid={0}", (pkt.pkid,)))
             try:
                 async with db_con as conn_ctx:
