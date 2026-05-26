@@ -7,18 +7,28 @@ where = ["src"]
 
 [project]
 name = "namebump"
-version = "0.0.14"
-description = "Namebump is a registrationless, key-authenticated name registry where writes bump prior values."
+version = "0.0.16"
+description = "Registrationless, key-authenticated name registry — every write bumps prior values. A decentralized DNS-style layer for peer discovery."
 readme = "README.md"
 requires-python = ">=3.5"
 license = {file = "LICENSE"}
 authors = [
     {name = "Matthew Roberts"}
 ]
-keywords = ["utility"]
+keywords = [
+    "name registry", "naming", "peer naming", "P2P naming",
+    "DNS alternative", "ENS alternative", "decentralized",
+    "key-authenticated", "ECDSA", "distributed naming",
+    "asyncio", "registrationless", "peer discovery",
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Topic :: Internet :: Name Service (DNS)",
+    "Topic :: System :: Networking",
 ]
 
 dependencies = ["aionetiface", "ecdsa"]
