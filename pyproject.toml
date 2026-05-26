@@ -7,7 +7,7 @@ where = ["src"]
 
 [project]
 name = "namebump"
-version = "0.0.14"
+version = "0.0.15"
 description = "Registrationless, key-authenticated name registry — every write bumps prior values. A decentralized DNS-style layer for peer discovery."
 readme = "README.md"
 requires-python = ">=3.5"
