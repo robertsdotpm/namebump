@@ -131,7 +131,7 @@ class Client:
         self.afs = []
         self.addr = None
 
-    async def start(self):
+    def start(self):
         """Resolve the server address and initialise the NIC and clock; return self."""
         if not self.sys_clock:
             self.sys_clock = time
@@ -145,7 +145,7 @@ class Client:
         # races every entry in self.afs -- v4 and v6 traverse
         # independent BGP planes, so a Cogent-vs-HE-style routing hole
         # on one AF is invisible to the other.
-        self.addr = await Address(*self.dest, self.nic)
+        self.addr = Address(*self.dest, self.nic)
         for af in self.nic.supported():
             try:
                 self.addr.select_ip(af)
@@ -163,7 +163,7 @@ class Client:
         """Allow ``await Client(...)`` as a shorthand for ``await Client(...).start()``."""
         return self.start().__await__()
 
-    async def get_dest_pipe(
+    def get_dest_pipe(
         self, proto=None, af=None,
     ):
         """Open and return a fresh pipe (TCP or UDP) to the namebump server.
@@ -185,9 +185,9 @@ class Client:
         # Same bind logic for both TCP and UDP -- the kernel uses the bound
         # address as the source for sendto / connect alike.
         if self.dest[0] in VALID_LOCALHOST:
-            route = await route.bind(ips=self.dest[0])
+            route = route.bind(ips=self.dest[0])
         else:
-            route = await route.bind()
+            route = route.bind()
 
         # Open the pipe. For TCP this performs the SYN/SYN-ACK handshake
         # under the bumped 6s con_timeout. For UDP, .connect() just
@@ -195,7 +195,7 @@ class Client:
         # so the call returns sub-millisecond regardless of network
         # health. UDP loss is handled by with_retry one frame up.
         try:
-            pipe = await Pipe(
+            pipe = Pipe(
                 proto, self.addr, route, conf=NAMEBUMP_PIPE_CONF,
             ).connect()
             if pipe is None:
@@ -209,7 +209,7 @@ class Client:
             # unreachable, which is expected during the cascade.
             raise
 
-    async def race_request(self, build_attempt):
+    def race_request(self, build_attempt):
         """Race a request over TCP and UDP concurrently; first success wins.
 
         build_attempt(proto) is a callable that returns a coroutine running
@@ -228,7 +228,7 @@ class Client:
             asyncio.ensure_future(build_attempt(UDP)),
         ]
         try:
-            done, pending = await asyncio.wait(
+            done, pending = asyncio.wait(
                 tasks, return_when=asyncio.FIRST_COMPLETED,
             )
             # Walk the first-finisher set first. If a winner succeeded,
@@ -259,7 +259,7 @@ class Client:
             # any final ConnectionError and decide whether to retry.
             for t in pending:
                 try:
-                    return await t
+                    return t
                 except asyncio.CancelledError:  # pylint: disable=try-except-raise
                     raise
                 except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
@@ -279,9 +279,9 @@ class Client:
             for t in tasks:
                 if not t.done():
                     t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            asyncio.gather(*tasks, return_exceptions=True)
 
-    async def race_get_paths(self, build_attempt):
+    def race_get_paths(self, build_attempt):
         """Race build_attempt(af, proto) across every (af, proto) combination.
 
         Used by GET only.  Reads are quota-free at the server, and v4 and
@@ -303,7 +303,7 @@ class Client:
         try:
             last_exc = None
             while pending:
-                done_set, still_pending = await asyncio.wait(
+                done_set, still_pending = asyncio.wait(
                     pending, return_when=asyncio.FIRST_COMPLETED,
                 )
                 pending = list(still_pending)
@@ -327,9 +327,9 @@ class Client:
             for t in tasks:
                 if not t.done():
                     t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            asyncio.gather(*tasks, return_exceptions=True)
 
-    async def return_resp(self, pipe):
+    def return_resp(self, pipe):
         """Read, decrypt, and deserialise the server's response from the pipe.
 
         Raises ConnectionError on decrypt / unpack failure so the
@@ -342,7 +342,7 @@ class Client:
         an "I/O quality" issue, not a logic bug.
         """
 
-        buf = await proto_recv(pipe)
+        buf = proto_recv(pipe)
 
         # proto_recv returns None on timeout / closed pipe. Without this guard
         # the None falls into decrypt() and crashes on msg[0:33] with a
@@ -364,7 +364,7 @@ class Client:
             pkt.value = None
         return pkt
 
-    async def send_pkt(
+    def send_pkt(
         self, pipe, pkt, kp, sign=True,
         af=None,
     ):
@@ -378,7 +378,7 @@ class Client:
             # aionetiface.utility.signing.ecdsa_sign_async helper so
             # the client's event loop stays free for concurrent
             # in-flight requests / response readers.
-            sig = await ecdsa_sign_async(kp.private, msg)
+            sig = ecdsa_sign_async(kp.private, msg)
         else:
             sig = b""
 
@@ -390,11 +390,11 @@ class Client:
         # spins up a server on a different port and breaks if a caller
         # ever overrides dest. self.dest is the canonical source.
         dest = (self.addr.select_ip(af).ip, self.dest[1])
-        send_success = await pipe.send(enc_msg, dest)
+        send_success = pipe.send(enc_msg, dest)
         if not send_success:
             raise IOError("client send pkt failure")
 
-    async def with_retry(self, attempt_coro_factory):
+    def with_retry(self, attempt_coro_factory):
         """Run attempt_coro_factory() up to DEFAULT_RETRIES times.
 
         Retries on network-class errors (OSError, ConnectionError,
@@ -405,7 +405,7 @@ class Client:
         last_exc = None
         for attempt in range(DEFAULT_RETRIES):
             try:
-                return await attempt_coro_factory()
+                return attempt_coro_factory()
             except asyncio.CancelledError:  # pylint: disable=try-except-raise
                 raise
             except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
@@ -413,7 +413,7 @@ class Client:
                 log_exception()
 
             if attempt + 1 < DEFAULT_RETRIES:
-                await asyncio.sleep(DEFAULT_RETRY_PAUSE)
+                asyncio.sleep(DEFAULT_RETRY_PAUSE)
         # All attempts failed -- re-raise the last network error so the
         # caller sees the same exception type they would have seen
         # without retries.
@@ -421,22 +421,22 @@ class Client:
             raise last_exc
         raise ConnectionError("Could not reach namebump server.")
 
-    async def get(
+    def get(
         self, name, kp=None
     ):
         """Fetch the value for name, optionally identifying the caller with a keypair."""
         expected_name = to_b(name)
 
         def attempt_for(af, proto):
-            async def one_attempt():
+            def one_attempt():
                 pipe = None
                 try:
                     t = self.sys_clock.time()
-                    pipe = await self.get_dest_pipe(proto=proto, af=af)
+                    pipe = self.get_dest_pipe(proto=proto, af=af)
                     vkc = kp.vkc if kp else self.reply_pk
                     pkt = Packet(OP_GET, name, vkc=vkc, updated=t)
-                    await self.send_pkt(pipe, pkt, kp, sign=bool(kp), af=af)
-                    resp = await self.return_resp(pipe)
+                    self.send_pkt(pipe, pkt, kp, sign=bool(kp), af=af)
+                    resp = self.return_resp(pipe)
                     # Validate the response matches the request.  return_resp
                     # only proves the packet decrypted under our reply key;
                     # it doesn't prove this server reply is the answer to
@@ -479,14 +479,14 @@ class Client:
                     return resp
                 finally:
                     if pipe is not None:
-                        await pipe.close()
+                        pipe.close()
             return one_attempt()
 
-        async def race():
-            return await self.race_get_paths(attempt_for)
-        return await self.with_retry(race)
+        def race():
+            return self.race_get_paths(attempt_for)
+        return self.with_retry(race)
 
-    async def put(
+    def put(
         self,
         name,
         value,
@@ -501,11 +501,11 @@ class Client:
         MAX_REQUEST_TTL in defs). Pass None to use the wire-format default.
         """
         def attempt_for(proto):
-            async def one_attempt():
+            def one_attempt():
                 pipe = None
                 try:
                     t = self.sys_clock.time()
-                    pipe = await self.get_dest_pipe(proto=proto)
+                    pipe = self.get_dest_pipe(proto=proto)
                     throw_bump = behavior == THROW_BUMP
                     effective_behavior = DONT_BUMP if throw_bump else behavior
 
@@ -514,9 +514,9 @@ class Client:
                         ttl=ttl,
                     )
 
-                    await self.send_pkt(pipe, pkt, kp)
+                    self.send_pkt(pipe, pkt, kp)
 
-                    ret = await self.return_resp(pipe)
+                    ret = self.return_resp(pipe)
                     if throw_bump and not ret.value:
                         # Application-level signal -- not a network failure,
                         # so it propagates through with_retry without retrying.
@@ -524,12 +524,12 @@ class Client:
                     return ret
                 finally:
                     if pipe is not None:
-                        await pipe.close()
+                        pipe.close()
             return one_attempt()
 
-        async def race():
-            return await self.race_request(attempt_for)
-        ret = await self.with_retry(race)
+        def race():
+            return self.race_request(attempt_for)
+        ret = self.with_retry(race)
         # Server clears the stored value (and updated=0) on ResourceLimit
         # so the client's return_resp converts pkt.value to None. Without
         # this guard, callers see a "successful" packet with value=None
@@ -543,7 +543,7 @@ class Client:
             )
         return ret
 
-    async def delete(
+    def delete(
         self,
         name,
         kp,
@@ -551,24 +551,24 @@ class Client:
     ):
         """Send a signed delete request for name and return the server's response."""
         def attempt_for(proto):
-            async def one_attempt():
+            def one_attempt():
                 pipe = None
                 try:
                     t = self.sys_clock.time()
-                    pipe = await self.get_dest_pipe(proto=proto)
+                    pipe = self.get_dest_pipe(proto=proto)
                     pkt = Packet(OP_DEL, name, vkc=kp.vkc, updated=t, ttl=ttl)
-                    await self.send_pkt(pipe, pkt, kp)
-                    return await self.return_resp(pipe)
+                    self.send_pkt(pipe, pkt, kp)
+                    return self.return_resp(pipe)
                 finally:
                     if pipe is not None:
-                        await pipe.close()
+                        pipe.close()
             return one_attempt()
 
-        async def race():
-            return await self.race_request(attempt_for)
-        return await self.with_retry(race)
+        def race():
+            return self.race_request(attempt_for)
+        return self.with_retry(race)
 
-    async def usage(self, kp, ttl=None):
+    def usage(self, kp, ttl=None):
         """Signed-owner query for the per-IP name quota state.
 
         Returns a dict ``{"af": int, "names_used": int, "name_limit": int}``
@@ -579,25 +579,25 @@ class Client:
         does not modify any state.
         """
         def attempt_for(proto):
-            async def one_attempt():
+            def one_attempt():
                 pipe = None
                 try:
                     t = self.sys_clock.time()
-                    pipe = await self.get_dest_pipe(proto=proto)
+                    pipe = self.get_dest_pipe(proto=proto)
                     pkt = Packet(
                         OP_USAGE, name=b"", value=b"",
                         vkc=kp.vkc, updated=t, ttl=ttl,
                     )
-                    await self.send_pkt(pipe, pkt, kp)
-                    return await self.return_resp(pipe)
+                    self.send_pkt(pipe, pkt, kp)
+                    return self.return_resp(pipe)
                 finally:
                     if pipe is not None:
-                        await pipe.close()
+                        pipe.close()
             return one_attempt()
 
-        async def race():
-            return await self.race_request(attempt_for)
-        ret = await self.with_retry(race)
+        def race():
+            return self.race_request(attempt_for)
+        ret = self.with_retry(race)
         if ret is None or ret.value is None:
             return None
         try:
@@ -608,18 +608,18 @@ class Client:
 
 if __name__ == "__main__":
 
-    async def workspace():
+    def workspace():
         """Exercise the put, get, and delete client calls end-to-end against a live server."""
         name = str(rand_plain(10))
         kp = Keypair.generate()
-        client = await Client(DEST, PK)
+        client = Client(DEST, PK)
 
-        out = await client.put(name, "value", kp)
+        out = client.put(name, "value", kp)
 
-        out = await client.get(name)
+        out = client.get(name)
 
-        out = await client.delete(name, kp)
+        out = client.delete(name, kp)
 
-        out = await client.get(name, kp)
+        out = client.get(name, kp)
 
     async_run(workspace())

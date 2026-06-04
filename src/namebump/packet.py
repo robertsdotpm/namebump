@@ -101,7 +101,7 @@ class Packet:
             log_exception()
             return False
 
-    async def is_valid_sig_async(self):
+    def is_valid_sig_async(self):
         """Async variant of is_valid_sig that runs the ECDSA verify on
         the default thread pool executor via the shared
         aionetiface.utility.signing.ecdsa_verify_async helper.  Used by
@@ -113,7 +113,7 @@ class Packet:
         vk = VerifyingKey.from_string(self.vkc, curve=SECP256k1)
         msg = self.get_msg_to_sign()
         try:
-            await ecdsa_verify_async(vk, self.sig, msg)
+            ecdsa_verify_async(vk, self.sig, msg)
             return True
         except BadSignatureError:
             log_exception()
